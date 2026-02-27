@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Example HPC runner (adapt modules/paths to your cluster)
-module load tools ngs anaconda3/2023.03 netmhcpan/4.0a perl ensembl-tools/87
+module load tools ngs anaconda3/2025.06-1 netmhcpan/4.1b perl/5.36.1 ensembl-tools/90
 
 # After installing mupexi2 (pip install -e .), you can run:
 mupexi2 \
