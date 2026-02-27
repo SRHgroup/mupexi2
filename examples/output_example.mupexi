@@ -1,0 +1,71 @@
+# Mode: SNV     
+# VERSION:      MuPeXI 2.0.0
+# CALL:         /home/projects/SRHgroup/projects/MuPeXI_germline/bin/mupexi.pipe/MuPeXI.py -v /home/projects/SRHgroup/projects/MuPeXI_germline/data/dna/vcf/Patient_9_3.2.Filtered.som.AF.vcf -l 9-11 -a HLA-A03:01,HLA-A33:03,HLA-B49:01,HLA-B07:02,HLA-C07:02,HLA-C07:01 -t -f
+ -n -c /home/projects/SRHgroup/apps/netMHCpan/4.0a/config.computerome.ini -p Patient_9 -d /home/projects/SRHgroup/projects/MuPeXI_germline/data/mupexi
+# DATE:         Monday 25 of November 2024
+# TIME:         15:17:48
+# PWD:          /home/projects/SRHgroup/projects/MuPeXI_germline/bin/mupexi.pipe
+HLA_allele      Mut_peptide     Norm_peptide    Mismatches      Cancer_Driver_Gene      Expression_Level        Expression_score        Chr     Gene_ID Gene_Symbol     Transcript_ID   Mutation_Consequence    Has_germline    Germline_positions      Mut_MHCrank_EL  Mut_MHCs
+core_EL Mutant_affinity_score   Mut_MHCrank_BA  Mut_MHCscore_BA Mut_MHCaffinity Norm_MHCrank_BA Norm_MHCscore_BA        Norm_MHCaffinity        Norm_MHCrank_EL Norm_MHCscore_EL        Normal_affinity_score   mutation_id_vep Amino_Acid_Change       peptide_position        
+tumor_vaf       normal_vaf      t_depth n_depth t_alt_count     Genomic_Position        Protein_position        priority_Score
+HLA-A03:01      DNRIQGGYK       DNRIQGGYE       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      14.1469 0.001948                21.6564 0.068   23957.4 81.4768 0.017273        41476.7 50.625  9.9e-05 
+        1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      NRIQGGYKN       NRIQGGYEN       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      44.625  0.000138                92.7845 0.011566        44118.6 90.7385 0.012749        43557.5 42.3333 
+0.000158                1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      RIQGGYKNV       RIQGGYENV       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      8.4188  0.00608         18.3802 0.076996        21735.4 21.8633 0.067502        24086.9 9.7724  0.004394
+                1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      IQGGYKNVP       IQGGYENVP       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      57.7778 6.8e-05         84.1728 0.016028        42039.2 90.0294 0.013159        43364.7 71.25   3.3e-05 
+        1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      QGGYKNVPT       QGGYENVPT       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      83.3333 1.6e-05         85.3968 0.01545 42303.0 90.4687 0.012905        43484.0 85.0    1.4e-05         
+1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      GGYKNVPTI       GGYENVPTI       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      13.1351 0.002291                28.9513 0.054085        27850.1 33.8987 0.047606        29872.5 13.8966 
+0.002026                1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      GYKNVPTID       GYENVPTID       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      48.6667 0.00011         85.7146 0.015293        42374.9 93.9588 0.010887        44443.9 55.2778 7.7e-05 
+        1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      YKNVPTIDI       YENVPTIDI       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      23.2542 0.000647                55.0161 0.030393        35987.7 56.4224 0.029606        36295.5 18.4609 
+0.001086                1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      KNVPTIDIH       ENVPTIDIH       1       No      -               1       ENSG00000083444 PLOD1   ENST00000196061 missense_variant        No      []      15.2291 0.001652                42.6903 0.038919        32816.4 80.2404 0.017844        41221.3 32.7727 
+0.000294                1_11970694_E/K  E/K     ['594'] 0.071   0.046   250     226     8       11970694        594     
+HLA-A03:01      GGLQPSGRG       GGLQPSGRR       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      60.3571 5.9e-05         79.2985 0.018276        41029.1 11.7065 0.108582        15443.5 5.0814  0.017481
+                1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      GLQPSGRGK       GLQPSGRRK       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      0.1505  0.702038                0.7952  0.481342        273.6   0.8633  0.47111 305.7   0.1518  0.700592
+                1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      LQPSGRGKR       LQPSGRRKR       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      11.4751 0.003097                24.3342 0.062141        25525.3 33.255  0.048343        29635.2 11.8887 
+0.002848                1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      QPSGRGKRK       QPSGRRKRK       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      15.141  0.001672                38.8792 0.042376        31611.6 39.5531 0.041727        31834.4 19.2301 
+0.000991                1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      PSGRGKRKP       PSGRRKRKP       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      93.75   6e-06           96.8532 0.006473        46618.0 96.7584 0.006668        46519.8 97.0    3e-06   
+        1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      SGRGKRKPG       SGRRKRKPG       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      43.5556 0.000147                70.6118 0.022237        39307.8 70.2619 0.022396        39240.2 62.8571 
+5.2e-05         1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      GRGKRKPGV       GRRKRKPGV       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      30.5926 0.000347                77.2793 0.0192  40620.9 65.8686 0.024527        38345.8 27.8    0.000436
+                1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      RGKRKPGVR       RRKRKPGVR       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      10.4803 0.003792                17.094  0.081297        20747.1 32.915  0.04874 29508.2 13.3851 0.002204
+                1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      GKRKPGVRG       RKRKPGVRG       1       Yes     -               1       ENSG00000142867 BCL10   ENST00000649060 missense_variant        No      []      33.7368 0.000275                83.4387 0.016367        41885.3 56.4653 0.029582        36304.9 23.661  
+0.000623                1_85276238_R/G  R/G     ['39']                                          85276238        39      
+HLA-A03:01      SRKPPIPLL       SRKPPIPLM       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      6.4763  0.010555                27.1114 0.056966        26995.3 23.397  0.064067        24998.9 5.404   
+0.015346                1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      RKPPIPLLE       RKPPIPLME       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      16.5652 0.001373                68.538  0.023227        38889.0 78.7675 0.018519        40921.3 17.9595 
+0.001151                1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      KPPIPLLET       KPPIPLMET       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      23.0847 0.000657                60.9175 0.027117        37286.2 61.2396 0.026946        37355.2 22.7397 
+0.000681                1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      PPIPLLETA       PPIPLMETA       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      39.75   0.000185                86.6356 0.014838        42584.0 85.4615 0.015418        42317.6 38.4615 
+0.000201                1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      PIPLLETAE       PIPLMETAE       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      70.0    3.5e-05         94.2753 0.010704        44532.0 94.4604 0.010597        44583.6 73.75   2.9e-05 
+        1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      IPLLETAED       IPLMETAED       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      76.4286 2.5e-05         90.6538 0.012798        43534.4 88.9089 0.013715        43104.6 75.7143 2.6e-05 
+        1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      PLLETAEDW       PLMETAEDW       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      40.5455 0.000176                82.2586 0.016912        41639.1 72.3327 0.021455        39641.8 34.6111 
+0.000259                1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      LLETAEDWE       LMETAEDWE       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      59.1667 6.3e-05         73.1668 0.021076        39804.7 69.2875 0.022862        39042.9 64.2857 4.8e-05 
+        1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      LETAEDWET       METAEDWET       1       No      -               1       ENSG00000014914 MTMR11  ENST00000439741 missense_variant        No      []      74.375  2.8e-05         95.2572 0.009756        44991.1 91.2176 0.012472        43688.2 64.2857 4.8e-05 
+        1_149934288_M/L M/L     ['124', '196']  0.107   0.056   134     104     16      149934288       196     
+HLA-A03:01      EEEEEEEEE       EEEEEEEEE       1       No      -               10      ENSG00000180592 SKIDA1  ENST00000449193 inframe_insertion       No      []      87.0    1.2e-05         98.4176 0.003255        48269.7 98.4176 0.003255        48269.7 87.0    1.2e-05 
+        10_21516537-21516538_G/EEG      G/EEG   ['350', '429']                                          21516537-21516538       429     
+HLA-A03:01      EEEEEEEEG       EEEEEEEEG       1       No      -               10      ENSG00000180592 SKIDA1  ENST00000449193 inframe_insertion       No      []      93.75   6e-06           98.3617 0.00337 48209.7 98.3617 0.00337 48209.7 93.75   6e-06           10_21516
+537-21516538_G/EEG      G/EEG   ['350', '429']                                          21516537-21516538       429     
+HLA-A03:01      EEEEEEEGG       EEEEEEEGG       1       No      -               10      ENSG00000180592 SKIDA1  ENST00000449193 inframe_insertion       No      []      95.0    5e-06           98.385  0.003322        48234.7 98.385  0.003322        48234.7 95.0    5e-06   
+        10_21516537-21516538_G/EEG      G/EEG   ['350', '429']                                          21516537-21516538       429     
+HLA-A03:01      EEEEEEGGS       EEEEEEGGS       1       No      -               10      ENSG00000180592 SKIDA1  ENST00000449193 inframe_insertion       No      []      80.8333 1.9e-05         97.9164 0.004286        47734.3 97.9164 0.004286        47734.3 80.8333 1.9e-05 
