@@ -89,7 +89,7 @@ def main(args):
                            input_.prefix, input_.outdir, input_.assembly, input_.fork, species)
         vep_info, vep_counters, transcript_info, protein_positions = build_vep_info(
             vep_file, input_.webserver, vcf_sorted_file, peptide_length, input_.tumor_sample, input_.normal_sample,
-            phasing_stats)
+            phasing_stats, input_.superpeptides)
 
         end_time_vep = datetime.now()
 
@@ -1062,7 +1062,7 @@ def run_vep(vcf_sorted_file, webserver, tmp_dir, vep_path, vep_dir, keep_tmp, fi
 
 
 def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumor_sample=None, normal_sample=None,
-                   phasing_stats=None):
+                   phasing_stats=None, superpeptides=False):
     print_ifnot_webserver('\tCreating mutation information dictionary', webserver)
     vep_info = []  # empty list
     previous_mutation_id = previous_mutation_id_vep = ''  # empty string
@@ -1086,7 +1086,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
         variant_types = {}
         variant_edit_sig = {}
         variant_phase = {}
-        germline_positions = {}
+        context_positions = {}
         format_idx = None
         tumor_idx = None
 
@@ -1124,9 +1124,9 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             else:
                 continue
 
-            if variant_type == 'GERMLINE':
-                variant_info = [consequence, line.strip().split('\t')[9], line.strip().split('\t')[10]]
-                germline_positions[chrom_pos] = variant_info
+            if variant_type in ('GERMLINE', 'SOMATIC', 'RNA_EDIT'):
+                variant_info = [consequence, line.strip().split('\t')[9], line.strip().split('\t')[10], variant_type]
+                context_positions[chrom_pos] = variant_info
 
     with open(vep_file.name) as f:
 
@@ -1169,8 +1169,9 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
 
             primary_phase_state = variant_phase.get((chr_, genome_pos), None)
             if variant_type in ('SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
-                nearby_germlines = get_nearby_germlines(chr_, genome_pos, germline_positions, peptide_length,
-                                                        primary_phase_state, variant_phase, phasing_stats)
+                nearby_germlines = get_nearby_germlines(chr_, genome_pos, context_positions, peptide_length,
+                                                        primary_phase_state, variant_phase, phasing_stats,
+                                                        include_all_sources=superpeptides)
             else:
                 nearby_germlines = None
             mutation_id_vep = '{}_{}_{}/{}'.format(chr_, genome_pos, aa_normal, aa_mutation)
@@ -1226,7 +1227,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
 #### function to get germlines surrounding a somatic with a given peptide length. returns a dict with position:AAchange
 
 def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary_phase_state=None, variant_phase=None,
-                         phasing_stats=None):
+                         phasing_stats=None, include_all_sources=False):
     def parse_interval(pos_str):
         if pos_str is None:
             return None
@@ -1267,6 +1268,11 @@ def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary
         return None
 
     for (g_chrom, g_pos), info in germline_positions.items():
+        source_set = info[3] if len(info) > 3 else 'GERMLINE'
+        if (not include_all_sources) and source_set != 'GERMLINE':
+            continue
+        if g_chrom == chrom and str(g_pos) == str(pos):
+            continue
         candidate_phase_state = variant_phase.get((g_chrom, g_pos), None)
         is_near = False
         g_interval = parse_interval(g_pos)
@@ -1581,7 +1587,8 @@ def mutation_sequence_creation(mutation_info, proteome_reference, genome_referen
     # Create empty named tuple
     PeptideSequenceInfo = namedtuple('peptide_sequence_info',
                                      ['chop_normal_sequence', 'mutation_sequence', 'normal_sequence',
-                                      'mutation_position', 'consequence', 'relative_germline_positions'])
+                                      'mutation_position', 'consequence', 'relative_germline_positions',
+                                      'relative_context_sources'])
 
     if mutation_info.mutation_consequence == 'missense_variant':
         peptide_sequence_info = missense_variant_peptide(proteome_reference, mutation_info, peptide_length,
@@ -1610,10 +1617,12 @@ def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, 
     mutation_sequence = normal_sequence[:index.mutation_peptide_position - 1] + mutation_info.aa_mut + normal_sequence[
                                                                                                        index.mutation_peptide_position:]
     consequence = 'M'
-    relative_germline_positions = None ####
+    relative_germline_positions = None
+    relative_context_sources = None
     
     if mutation_info.nearby_germlines:
         relative_germline_positions = []
+        relative_context_sources = []
         somatic_pos = int(mutation_info.prot_pos)
         for chrom_pos, info in mutation_info.nearby_germlines.items():
             germline_consequence = info[0]
@@ -1621,9 +1630,12 @@ def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, 
             if germline_consequence == 'missense_variant' and germline_dist_to_somatic < peptide_length:
                 germline_position = info[1]
                 AA_change = info[2].split('/')[1]
+                context_source = info[3] if len(info) > 3 else 'GERMLINE'
                 germline_index = int(germline_position) - index.lower_index
                 mutation_sequence = mutation_sequence[:germline_index - 1] + AA_change + mutation_sequence[germline_index:]
-                relative_germline_positions.append(germline_index)
+                if context_source == 'GERMLINE':
+                    relative_germline_positions.append(germline_index)
+                relative_context_sources.append((germline_index, context_source))
 
             elif germline_consequence == 'inframe_insertion':  #### to do
                 continue
@@ -1633,7 +1645,7 @@ def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, 
 
     # Return long peptide (created) and information
     return PeptideSequenceInfo(normal_sequence, mutation_sequence, normal_sequence, index.mutation_peptide_position,
-                               consequence, relative_germline_positions)
+                               consequence, relative_germline_positions, relative_context_sources)
 
 
 # peptide_extraction > mutation_sequence_creation
@@ -1644,6 +1656,7 @@ def insertion_peptide(proteome_reference, mutation_info, peptide_length, Peptide
                           codon=None, frame_type=None)
     normal_sequence = aaseq[index.lower_index:index.higher_index]
     relative_germline_positions = None
+    relative_context_sources = None
 
     if mutation_info.aa_normal == '-':
         mutation_sequence = normal_sequence[:index.mutation_peptide_position] + \
@@ -1659,7 +1672,8 @@ def insertion_peptide(proteome_reference, mutation_info, peptide_length, Peptide
     consequence = 'I'
 
     # Return long peptide (created) and information
-    return PeptideSequenceInfo(chop_normal_sequence, mutation_sequence, normal_sequence, insertion_range, consequence, relative_germline_positions)
+    return PeptideSequenceInfo(chop_normal_sequence, mutation_sequence, normal_sequence, insertion_range, consequence,
+                               relative_germline_positions, relative_context_sources)
 
 
 # peptide_extraction > mutation_sequence_creation
@@ -1670,6 +1684,7 @@ def deletion_peptide(proteome_reference, mutation_info, peptide_length, PeptideS
                           codon=None, frame_type=None)
     normal_sequence = aaseq[index.lower_index:index.higher_index]
     relative_germline_positions = None
+    relative_context_sources = None
 
     if mutation_info.aa_mut == '-':
         mutation_sequence = normal_sequence[:index.mutation_peptide_position - 1] + normal_sequence[
@@ -1685,7 +1700,8 @@ def deletion_peptide(proteome_reference, mutation_info, peptide_length, PeptideS
 
     # Return long peptide (created) and information
     return PeptideSequenceInfo(chop_normal_sequence, mutation_sequence, normal_sequence,
-                               index.mutation_peptide_position - 1, consequence, relative_germline_positions)
+                               index.mutation_peptide_position - 1, consequence, relative_germline_positions,
+                               relative_context_sources)
 
 
 # peptide_extraction > mutation_sequence_creation
@@ -1701,6 +1717,7 @@ def frame_shift_peptide(genome_reference, proteome_reference, mutation_info, pep
                              index_type='amino_acid', codon=None, frame_type=None)
     normal_sequence = aaseq[aa_index.lower_index:aa_index.higher_index]
     relative_germline_positions = None
+    relative_context_sources = None
 
     if mutation_info.codon_mut.islower():  # frame shift deletion
         n_index = index_creator(mutation_info.prot_pos, peptide_length, aaseq, mutation_info.codon_normal,
@@ -1732,7 +1749,8 @@ def frame_shift_peptide(genome_reference, proteome_reference, mutation_info, pep
     frameshift_range = '{}:{}'.format(aa_index.mutation_peptide_position, len(mutation_aaseq))
 
     # Return long peptides and information
-    return PeptideSequenceInfo(chop_normal_sequence, mutation_aaseq, normal_sequence, frameshift_range, consequence, relative_germline_positions)
+    return PeptideSequenceInfo(chop_normal_sequence, mutation_aaseq, normal_sequence, frameshift_range, consequence,
+                               relative_germline_positions, relative_context_sources)
 
 
 # peptide_extraction > mutation_sequence_creation > frame_shift_peptide
@@ -1811,6 +1829,7 @@ def peptide_selection(normpeps, mutpeps, peptide_mutation_position, intermediate
         #### check and annotate if the germline mutation,in case its there, is inside of the chopped peptide
         has_germline = 'No'
         germline_positions = []
+        context_source_counts = {'S': 0, 'G': 0, 'R': 0}
         if peptide_sequence_info.consequence == 'M':
             start_pos = p_length - int(mutpos) + 1
             end_pos = len(peptide_sequence_info.mutation_sequence)-int(mutpos) + 1
@@ -1820,10 +1839,20 @@ def peptide_selection(normpeps, mutpeps, peptide_mutation_position, intermediate
                     if germ_pos >= start_pos and germ_pos <=end_pos:
                         has_germline = 'Yes'
                         germline_positions.append(germ_pos - start_pos + 1)
+        if peptide_sequence_info.relative_context_sources is not None:
+            for context_pos, context_source in peptide_sequence_info.relative_context_sources:
+                if context_pos >= start_pos and context_pos <= end_pos:
+                    if context_source == 'GERMLINE':
+                        context_source_counts['G'] += 1
+                    elif context_source == 'SOMATIC':
+                        context_source_counts['S'] += 1
+                    elif context_source == 'RNA_EDIT':
+                        context_source_counts['R'] += 1
 
 
         # fill dictionary
-        peptide_info[mutpep][normpep] = [mutation_info, peptide_sequence_info, mutpos, pep_match_info, has_germline, germline_positions]
+        peptide_info[mutpep][normpep] = [mutation_info, peptide_sequence_info, mutpos, pep_match_info, has_germline,
+                                         germline_positions, context_source_counts]
 
     return peptide_info, intermediate_peptide_counters
 
@@ -2134,9 +2163,10 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     peptide_position = snv_info_tuple[2]
     has_germline = snv_info_tuple[4]
     germline_positions = snv_info_tuple[5]
-    g_count = len(germline_positions) if germline_positions is not None else 0
-    s_count = 1 if mutation_info.variant_type == 'SOMATIC' else 0
-    r_count = 1 if mutation_info.variant_type == 'RNA_EDIT' else 0
+    context_source_counts = snv_info_tuple[6] if len(snv_info_tuple) > 6 else {'S': 0, 'G': 0, 'R': 0}
+    s_count = (1 if mutation_info.variant_type == 'SOMATIC' else 0) + int(context_source_counts.get('S', 0))
+    g_count = int(context_source_counts.get('G', 0))
+    r_count = (1 if mutation_info.variant_type == 'RNA_EDIT' else 0) + int(context_source_counts.get('R', 0))
     n_mutations = 'S={}:G={}:R={}'.format(s_count, g_count, r_count)
 
     mutation_id_vep = '{}_{}_{}/{}'.format(mutation_info.chr, mutation_info.pos, mutation_info.aa_normal,
@@ -2793,6 +2823,8 @@ def usage():
         --rnaedit-known-key     INFO key used to mark known RNA edits               KNOWN_RNAEDIT_DB
         --phasing-mode          Phasing policy for germline context                  auto
                                 (auto/strict)
+        --superpeptides         Include phased/hom-alt nearby S/R variants as context false
+                                (true/false)
         Other options (these do not take values)
         -f, --make-fasta        Create FASTA file with long peptides 
                                 - mutation in the middle
@@ -2834,7 +2866,8 @@ def read_options(argv):
                                        'make-fasta', 'keep-temp', 'mismatch-print', 'webserver', 'liftover', 'help',
                                        'vcf-type=', 'vcf_type=', 'germlines=', 'rna-edit=', 'rna_edit=',
                                        'tumor-sample=', 'normal-sample=', 'rnaedit-known-only',
-                                       'rnaedit-allow-novel', 'rnaedit-known-key=', 'phasing-mode='])
+                                       'rnaedit-allow-novel', 'rnaedit-known-key=', 'phasing-mode=',
+                                       'superpeptides='])
         if not optlist:
             print('No options supplied')
             usage()
@@ -2937,6 +2970,7 @@ def read_options(argv):
     phasing_mode = opts.get('--phasing-mode', 'auto').strip().lower()
     if phasing_mode not in ('auto', 'strict'):
         sys.exit('ERROR: --phasing-mode must be one of: auto, strict')
+    superpeptides = parse_bool_opt(opts.get('--superpeptides', 'false'), '--superpeptides')
 
     # Create and fill input named-tuple
     Input = namedtuple('input',
@@ -2945,12 +2979,12 @@ def read_options(argv):
                         'fasta_file_name', 'webserver', 'outdir', 'keep_temp', 'prefix', 'print_mismatch', 'liftover',
                         'expression_type', 'num_mismatches', 'assembly', 'fork', 'species', 'netmhc_anal',
                         'vcf_type', 'germlines', 'rna_edit', 'tumor_sample', 'normal_sample',
-                        'rnaedit_known_only', 'rnaedit_known_key', 'phasing_mode'])
+                        'rnaedit_known_only', 'rnaedit_known_key', 'phasing_mode', 'superpeptides'])
     inputinfo = Input(vcf_file, fusion_file, peptide_length, output, logfile, HLA_alleles, config, expression_file,
                       fasta_file_name,
                       webserver, outdir, keep_temp, prefix, print_mismatch, liftover, expression_type, num_mismatches,
                       assembly, fork, species, netmhc_anal, vcf_type, germlines, rna_edit, tumor_sample, normal_sample,
-                      rnaedit_known_only, rnaedit_known_key, phasing_mode)
+                      rnaedit_known_only, rnaedit_known_key, phasing_mode, superpeptides)
 
     return inputinfo
 
