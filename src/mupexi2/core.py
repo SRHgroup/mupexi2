@@ -75,8 +75,9 @@ def main(args):
                                  input_.prefix, tmp_dir, input_.config)
         if (input_.germlines or input_.rna_edit) and not vcf_has_sourceset(vcf_file, input_.liftover):
             sys.exit('ERROR: SOURCE_SET is required when --germlines=true or --rna-edit=true')
-        check_phasing_requirements(vcf_file, input_.liftover, input_.webserver, input_.germlines, input_.rna_edit,
-                                   input_.tumor_sample, input_.normal_sample)
+        phasing_stats = check_phasing_requirements(vcf_file, input_.liftover, input_.webserver, input_.germlines,
+                                                   input_.rna_edit, input_.tumor_sample, input_.normal_sample,
+                                                   input_.phasing_mode)
         vcf_sorted_file = create_vep_compatible_vcf(vcf_file, input_.webserver, input_.keep_temp, input_.outdir,
                                                     input_.prefix, tmp_dir, input_.liftover, input_.germlines,
                                                     input_.rna_edit, input_.rnaedit_known_only,
@@ -87,7 +88,8 @@ def main(args):
         vep_file = run_vep(vcf_sorted_file, input_.webserver, tmp_dir, paths.vep_path, paths.vep_dir, input_.keep_temp,
                            input_.prefix, input_.outdir, input_.assembly, input_.fork, species)
         vep_info, vep_counters, transcript_info, protein_positions = build_vep_info(
-            vep_file, input_.webserver, vcf_sorted_file, peptide_length, input_.tumor_sample, input_.normal_sample)
+            vep_file, input_.webserver, vcf_sorted_file, peptide_length, input_.tumor_sample, input_.normal_sample,
+            phasing_stats)
 
         end_time_vep = datetime.now()
 
@@ -635,10 +637,14 @@ def parse_genotype_state(gt_value, ps_value):
     gt = (gt_value or '').strip()
     ps = (ps_value or '').strip()
     if gt in ('.', './.', '.|.', ''):
-        return {'is_hom_alt': False, 'is_phased': False, 'hap': None, 'ps': None}
+        return {'gt': gt, 'is_hom_alt': False, 'is_het': False, 'has_pipe': False, 'has_ps': False,
+                'is_phased': False, 'hap': None, 'ps': None}
 
     is_hom_alt = gt in ('1/1', '1|1')
-    is_phased = '|' in gt and ps not in ('', '.')
+    is_het = gt in ('0/1', '1/0', '0|1', '1|0')
+    has_pipe = '|' in gt
+    has_ps = ps not in ('', '.')
+    is_phased = has_pipe and has_ps
     hap = None
     if is_phased:
         left, right = gt.split('|', 1)
@@ -648,7 +654,8 @@ def parse_genotype_state(gt_value, ps_value):
             hap = 1
         elif left == '1' and right == '1':
             hap = 'both'
-    return {'is_hom_alt': is_hom_alt, 'is_phased': is_phased, 'hap': hap, 'ps': ps if ps not in ('', '.') else None}
+    return {'gt': gt, 'is_hom_alt': is_hom_alt, 'is_het': is_het, 'has_pipe': has_pipe, 'has_ps': has_ps,
+            'is_phased': is_phased, 'hap': hap, 'ps': ps if has_ps else None}
 
 
 def should_apply_context_variant(primary_state, context_state):
@@ -666,13 +673,17 @@ def should_apply_context_variant(primary_state, context_state):
 
 
 def check_phasing_requirements(vcf_file, liftover, webserver, germlines=False, rna_edit=False, tumor_sample=None,
-                               normal_sample=None):
+                               normal_sample=None, phasing_mode='auto'):
     vcf_file_name = vcf_file if liftover is None else vcf_file.name
-    has_unphased_primary = False
+    phasing_stats = {
+        'germline_het_records': 0,
+        'phased_het_records': 0,
+        'phased_with_ps_het_records': 0,
+        'unphased_primary_records': 0
+    }
     with open_text_maybe_gzip(vcf_file_name) as f:
         tumor_idx = None
         format_idx = None
-        info_idx = None
         for line in f:
             if line.startswith('##'):
                 continue
@@ -683,8 +694,8 @@ def check_phasing_requirements(vcf_file, liftover, webserver, germlines=False, r
                 continue
 
             fields = line.rstrip('\n').split('\t')
-            if tumor_idx is None or format_idx is None or info_idx is None:
-                info_idx = 7
+            if tumor_idx is None or format_idx is None:
+                continue
             source_set = infer_source_set_from_info(fields[7])
             if source_set not in ('GERMLINE', 'SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
                 continue
@@ -694,17 +705,47 @@ def check_phasing_requirements(vcf_file, liftover, webserver, germlines=False, r
             sample_map = dict(zip(format_keys, sample_values))
             state = parse_genotype_state(sample_map.get('GT', ''), sample_map.get('PS', ''))
 
-            if germlines and source_set == 'GERMLINE' and not state['is_hom_alt'] and not state['is_phased']:
-                sys.exit('ERROR: germlines=true requires phased VCF for non-homozygous germline calls')
+            if source_set == 'GERMLINE' and state['is_het']:
+                phasing_stats['germline_het_records'] += 1
+                if state['has_pipe']:
+                    phasing_stats['phased_het_records'] += 1
+                if state['is_phased']:
+                    phasing_stats['phased_with_ps_het_records'] += 1
+            elif source_set in ('SOMATIC', 'RNA_EDIT') and not state['is_hom_alt'] and not state['is_phased']:
+                phasing_stats['unphased_primary_records'] += 1
 
-            if (not germlines) and rna_edit and source_set in ('SOMATIC', 'RNA_EDIT') and not state['is_hom_alt'] \
-                    and not state['is_phased']:
-                has_unphased_primary = True
+    total_het = phasing_stats['germline_het_records']
+    phased_het = phasing_stats['phased_het_records']
+    if total_het == 0 or phased_het == 0:
+        vcf_phasing_status = 'NONE'
+    elif phased_het == total_het:
+        vcf_phasing_status = 'FULL'
+    else:
+        vcf_phasing_status = 'PARTIAL'
 
-    if has_unphased_primary:
+    if germlines and phasing_mode == 'strict' and vcf_phasing_status != 'FULL':
+        sys.exit('ERROR: phasing-mode=strict requires full phasing of heterozygous germline variants '
+                 '(found status: {})'.format(vcf_phasing_status))
+
+    if germlines and total_het > 0 and vcf_phasing_status != 'FULL':
         print_ifnot_webserver(
-            '\tWARNING: VCF not phased for some primary variants; adjacent context substitutions will not be applied',
+            '\tWARNING: VCF is partially phased (whatshap). Unphased heterozygous germline variants will be ignored '
+            'as context; only hom-alt or same-PS+hap germlines are applied.',
             webserver)
+    if (not germlines) and rna_edit and phasing_stats['unphased_primary_records'] > 0:
+        print_ifnot_webserver(
+            '\tWARNING: Primary variants include unphased records. Processing will continue without adjacent '
+            'context substitutions.',
+            webserver)
+
+    print_ifnot_webserver('\tPhasing stats: status={} germline_het={} phased_het={} phased_with_ps_het={}'.format(
+        vcf_phasing_status,
+        phasing_stats['germline_het_records'],
+        phasing_stats['phased_het_records'],
+        phasing_stats['phased_with_ps_het_records']),
+        webserver)
+    phasing_stats['vcf_phasing_status'] = vcf_phasing_status
+    return phasing_stats
 
 
 def liftover_hg19(liftover, webserver, vcf_file, keep_tmp, outdir, file_prefix, tmp_dir, config_file):
@@ -1020,7 +1061,8 @@ def run_vep(vcf_sorted_file, webserver, tmp_dir, vep_path, vep_dir, keep_tmp, fi
     return vep_file
 
 
-def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumor_sample=None, normal_sample=None):
+def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumor_sample=None, normal_sample=None,
+                   phasing_stats=None):
     print_ifnot_webserver('\tCreating mutation information dictionary', webserver)
     vep_info = []  # empty list
     previous_mutation_id = previous_mutation_id_vep = ''  # empty string
@@ -1031,7 +1073,10 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
                                 'symbol','variant_type','nearby_germlines'])
     transcript_info = defaultdict(dict)
     protein_positions = defaultdict(lambda: defaultdict(dict))
-    germline_info = {}
+    if phasing_stats is None:
+        phasing_stats = {}
+    phasing_stats.setdefault('skipped_unphased_het_germline_context', 0)
+    phasing_stats.setdefault('applied_context_records', 0)
 
     non_used_mutation_count, misssense_variant_count, inframe_insertion_count, \
     inframe_deletion_count, frameshift_variant_count = 0, 0, 0, 0, 0
@@ -1120,7 +1165,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             primary_phase_state = variant_phase.get((chr_, genome_pos), None)
             if variant_type in ('SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
                 nearby_germlines = get_nearby_germlines(chr_, genome_pos, germline_positions, peptide_length,
-                                                        primary_phase_state, variant_phase)
+                                                        primary_phase_state, variant_phase, phasing_stats)
             else:
                 nearby_germlines = None
             mutation_id_vep = '{}_{}_{}/{}'.format(chr_, genome_pos, aa_normal, aa_mutation)
@@ -1166,35 +1211,52 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
     vep_counters = VEPCounters(non_used_mutation_count, misssense_variant_count, gene_count, transcript_Count,
                                inframe_insertion_count, inframe_deletion_count, frameshift_variant_count)
 
+    print_ifnot_webserver('\tContext stats: skipped_unphased_het_germline_context={} applied_context_records={}'.format(
+        phasing_stats.get('skipped_unphased_het_germline_context', 0),
+        phasing_stats.get('applied_context_records', 0)), webserver)
+
     return vep_info, vep_counters, transcript_info, protein_positions
 
 #### function to get germlines surrounding a somatic with a given peptide length. returns a dict with position:AAchange
 
-def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary_phase_state=None, variant_phase=None):
+def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary_phase_state=None, variant_phase=None,
+                         phasing_stats=None):
     nearby_germlines = {}
     max_distance = peptide_length[-1] * 3
     variant_phase = variant_phase if variant_phase is not None else {}
+    phasing_stats = phasing_stats if phasing_stats is not None else {}
+    phasing_stats.setdefault('skipped_unphased_het_germline_context', 0)
+    phasing_stats.setdefault('applied_context_records', 0)
     for (g_chrom, g_pos), info in germline_positions.items():
         candidate_phase_state = variant_phase.get((g_chrom, g_pos), None)
-        if not should_apply_context_variant(primary_phase_state, candidate_phase_state):
-            continue
+        is_near = False
         if germline_positions[(g_chrom, g_pos)][0] == 'missense_variant':
             if '-' in g_pos or '-' in pos:
                 continue
             if g_chrom == chrom and abs(int(g_pos) - int(pos)) <= max_distance:
-                nearby_germlines[(g_chrom, g_pos)] = info
+                is_near = True
         elif germline_positions[(g_chrom, g_pos)][0] == 'inframe_insertion':
             start, stop = g_pos.split('-')
             if '-' in g_pos or '-' in pos:
                 continue
             if g_chrom == chrom and (abs(int(start)-int(pos)) <= max_distance or abs(int(stop)-int(pos)) <= max_distance):
-                nearby_germlines[(g_chrom, g_pos)] = info
+                is_near = True
         elif germline_positions[(g_chrom, g_pos)][0] == 'inframe_deletion':
             start, stop = g_pos.split('-')
             if '-' in g_pos or '-' in pos:
                 continue
             if g_chrom == chrom and abs(int(start)-int(pos)) <= max_distance:
-                nearby_germlines[(g_chrom, g_pos)] = info
+                is_near = True
+        if not is_near:
+            continue
+
+        can_apply = should_apply_context_variant(primary_phase_state, candidate_phase_state)
+        if can_apply:
+            nearby_germlines[(g_chrom, g_pos)] = info
+            phasing_stats['applied_context_records'] += 1
+        elif candidate_phase_state is not None and candidate_phase_state.get('is_het', False) and \
+                not candidate_phase_state.get('is_phased', False):
+            phasing_stats['skipped_unphased_het_germline_context'] += 1
     nearby_germlines = dict(sorted(nearby_germlines.items()))
     if not nearby_germlines:
         nearby_germlines = None
@@ -2700,6 +2762,8 @@ def usage():
         --rnaedit-known-only    Keep only RNA_EDIT variants marked as known         true
         --rnaedit-allow-novel   Include novel RNA_EDIT variants (overrides known-only)
         --rnaedit-known-key     INFO key used to mark known RNA edits               KNOWN_RNAEDIT_DB
+        --phasing-mode          Phasing policy for germline context                  auto
+                                (auto/strict)
         Other options (these do not take values)
         -f, --make-fasta        Create FASTA file with long peptides 
                                 - mutation in the middle
@@ -2741,7 +2805,7 @@ def read_options(argv):
                                        'make-fasta', 'keep-temp', 'mismatch-print', 'webserver', 'liftover', 'help',
                                        'vcf-type=', 'vcf_type=', 'germlines=', 'rna-edit=', 'rna_edit=',
                                        'tumor-sample=', 'normal-sample=', 'rnaedit-known-only',
-                                       'rnaedit-allow-novel', 'rnaedit-known-key='])
+                                       'rnaedit-allow-novel', 'rnaedit-known-key=', 'phasing-mode='])
         if not optlist:
             print('No options supplied')
             usage()
@@ -2841,6 +2905,9 @@ def read_options(argv):
     rnaedit_known_key = opts.get('--rnaedit-known-key', 'KNOWN_RNAEDIT_DB').strip()
     if not rnaedit_known_key:
         sys.exit('ERROR: --rnaedit-known-key must be non-empty')
+    phasing_mode = opts.get('--phasing-mode', 'auto').strip().lower()
+    if phasing_mode not in ('auto', 'strict'):
+        sys.exit('ERROR: --phasing-mode must be one of: auto, strict')
 
     # Create and fill input named-tuple
     Input = namedtuple('input',
@@ -2849,12 +2916,12 @@ def read_options(argv):
                         'fasta_file_name', 'webserver', 'outdir', 'keep_temp', 'prefix', 'print_mismatch', 'liftover',
                         'expression_type', 'num_mismatches', 'assembly', 'fork', 'species', 'netmhc_anal',
                         'vcf_type', 'germlines', 'rna_edit', 'tumor_sample', 'normal_sample',
-                        'rnaedit_known_only', 'rnaedit_known_key'])
+                        'rnaedit_known_only', 'rnaedit_known_key', 'phasing_mode'])
     inputinfo = Input(vcf_file, fusion_file, peptide_length, output, logfile, HLA_alleles, config, expression_file,
                       fasta_file_name,
                       webserver, outdir, keep_temp, prefix, print_mismatch, liftover, expression_type, num_mismatches,
                       assembly, fork, species, netmhc_anal, vcf_type, germlines, rna_edit, tumor_sample, normal_sample,
-                      rnaedit_known_only, rnaedit_known_key)
+                      rnaedit_known_only, rnaedit_known_key, phasing_mode)
 
     return inputinfo
 
