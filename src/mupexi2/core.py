@@ -2134,6 +2134,10 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     peptide_position = snv_info_tuple[2]
     has_germline = snv_info_tuple[4]
     germline_positions = snv_info_tuple[5]
+    g_count = len(germline_positions) if germline_positions is not None else 0
+    s_count = 1 if mutation_info.variant_type == 'SOMATIC' else 0
+    r_count = 1 if mutation_info.variant_type == 'RNA_EDIT' else 0
+    n_mutations = 'S={}:G={}:R={}'.format(s_count, g_count, r_count)
 
     mutation_id_vep = '{}_{}_{}/{}'.format(mutation_info.chr, mutation_info.pos, mutation_info.aa_normal,
                                            mutation_info.aa_mut)
@@ -2161,6 +2165,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
         'Norm_peptide': Norm_peptide, 'Gene_ID': mutation_info.gene_id,
         'mutation_id_vep': mutation_id_vep, 'Transcript_ID': mutation_info.trans_id,
         'Mutation_Origin': 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC',
+        'n_mutations': n_mutations,
         'edit_sig': mutation_info.edit_sig if mutation_info.variant_type == 'RNA_EDIT' else 'NA',
         'Amino_Acid_Change': '{}/{}'.format(mutation_info.aa_normal, mutation_info.aa_mut),
         'peptide_position': peptide_position, 'Chr': mutation_info.chr,
@@ -2231,7 +2236,7 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
     mupexi_core_cols = ['HLA_allele', 'Mut_peptide', 'Norm_peptide', 'Mismatches',
                         'Cancer_Driver_Gene', 'Expression_Level', 'Expression_score',
                         'Chr', 'Gene_ID', 'Gene_Symbol', 'Transcript_ID',
-                        'Mutation_Consequence', 'Mutation_Origin', 'edit_sig', 'has_germline', 'Germline_positions']  # mismatches should be in the core
+                        'Mutation_Consequence', 'Mutation_Origin', 'n_mutations', 'edit_sig', 'has_germline', 'Germline_positions']  # mismatches should be in the core
 
     net_mhc_EL_cols = ['Mut_MHCrank_EL', 'Mut_MHCscore_EL', 'Mutant_affinity_score']
     net_mhc_BA_cols = ['Mut_MHCrank_BA', 'Mut_MHCscore_BA', 'Mut_MHCaffinity']
