@@ -2164,9 +2164,10 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     has_germline = snv_info_tuple[4]
     germline_positions = snv_info_tuple[5]
     context_source_counts = snv_info_tuple[6] if len(snv_info_tuple) > 6 else {'S': 0, 'G': 0, 'R': 0}
-    s_count = (1 if mutation_info.variant_type == 'SOMATIC' else 0) + int(context_source_counts.get('S', 0))
+    primary_origin = 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC'
+    s_count = (1 if primary_origin == 'SOMATIC' else 0) + int(context_source_counts.get('S', 0))
     g_count = int(context_source_counts.get('G', 0))
-    r_count = (1 if mutation_info.variant_type == 'RNA_EDIT' else 0) + int(context_source_counts.get('R', 0))
+    r_count = (1 if primary_origin == 'RNA_EDIT' else 0) + int(context_source_counts.get('R', 0))
     n_mutations = 'S={}:G={}:R={}'.format(s_count, g_count, r_count)
 
     mutation_id_vep = '{}_{}_{}/{}'.format(mutation_info.chr, mutation_info.pos, mutation_info.aa_normal,
@@ -2194,7 +2195,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     return {**{
         'Norm_peptide': Norm_peptide, 'Gene_ID': mutation_info.gene_id,
         'mutation_id_vep': mutation_id_vep, 'Transcript_ID': mutation_info.trans_id,
-        'Mutation_Origin': 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC',
+        'Mutation_Origin': primary_origin,
         'n_mutations': n_mutations,
         'edit_sig': mutation_info.edit_sig if mutation_info.variant_type == 'RNA_EDIT' else 'NA',
         'Amino_Acid_Change': '{}/{}'.format(mutation_info.aa_normal, mutation_info.aa_mut),
