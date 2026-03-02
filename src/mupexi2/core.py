@@ -72,6 +72,8 @@ def main(args):
         variant_caller = detect_variant_caller(input_.vcf_file, input_.webserver)
         vcf_file = liftover_hg19(input_.liftover, input_.webserver, input_.vcf_file, input_.keep_temp, input_.outdir,
                                  input_.prefix, tmp_dir, input_.config)
+        if (input_.germlines or input_.rna_edit) and not vcf_has_sourceset(vcf_file, input_.liftover):
+            sys.exit('ERROR: SOURCE_SET is required when --germlines=true or --rna-edit=true')
         vcf_sorted_file = create_vep_compatible_vcf(vcf_file, input_.webserver, input_.keep_temp, input_.outdir,
                                                     input_.prefix, tmp_dir, input_.liftover)
 
@@ -577,6 +579,45 @@ def detect_variant_caller(vcf_file, webserver):
     return variant_caller
 
 
+def parse_info_field(info_field):
+    info = {}
+    for token in info_field.strip().split(';'):
+        if not token:
+            continue
+        if '=' in token:
+            key, value = token.split('=', 1)
+            info[key] = value
+        else:
+            info[token] = True
+    return info
+
+
+def infer_source_set_from_info(info_field):
+    info = parse_info_field(info_field)
+    source_set = info.get('SOURCE_SET', None)
+    if source_set is not None:
+        source_set = source_set.strip().upper()
+        if source_set in ('SOMATIC', 'GERMLINE', 'RNA_EDIT'):
+            return source_set
+    if 'SOMATIC' in info:
+        return 'SOMATIC'
+    if 'GERMLINE' in info:
+        return 'GERMLINE'
+    return 'UNKNOWN'
+
+
+def vcf_has_sourceset(vcf_file, liftover):
+    vcf_file_name = vcf_file if liftover is None else vcf_file.name
+    with open(vcf_file_name) as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+            columns = line.strip().split('\t')
+            if len(columns) > 7 and 'SOURCE_SET=' in columns[7]:
+                return True
+    return False
+
+
 def liftover_hg19(liftover, webserver, vcf_file, keep_tmp, outdir, file_prefix, tmp_dir, config_file):
     if liftover is not None:
         print_ifnot_webserver('\tPerforming Liftover', webserver)
@@ -828,9 +869,9 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length):
         for line in vcf.readlines():
             if line.startswith('#'):
                 continue
-            chrom_pos = (line.strip().split("\t")[0], line.strip().split("\t")[1])
-            VT = line.strip().split("\t")[9].split(":")[-2]
-            variant_types[chrom_pos] = VT
+            columns = line.strip().split("\t")
+            chrom_pos = (columns[0], columns[1])
+            variant_types[chrom_pos] = infer_source_set_from_info(columns[7])
 
         for line in f.readlines():
             if line.startswith('#'):
@@ -884,11 +925,12 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length):
                 prot_pos, prot_pos_to = line[9].split('-')
             else:
                 prot_pos, prot_pos_to = line[9].strip(), None
-            if mutation_consequence == 'missense_variant':
-                variant_type = variant_types[(chr_, genome_pos)]
+            variant_type = variant_types.get((chr_, genome_pos), 'UNKNOWN')
             if variant_type == 'SOMATIC':
                 nearby_germlines = get_nearby_germlines(chr_, genome_pos, germline_positions, peptide_length)
             elif variant_type == 'GERMLINE':
+                nearby_germlines = None
+            else:
                 nearby_germlines = None
             mutation_id_vep = '{}_{}_{}/{}'.format(chr_, genome_pos, aa_normal, aa_mutation)
             # Generate dict of dicts (dependent on both mutation ID and gene ID)

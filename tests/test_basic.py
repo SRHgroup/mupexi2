@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from mupexi2.core import extract_peptide_length, read_options
+from mupexi2.core import extract_peptide_length, infer_source_set_from_info, read_options, vcf_has_sourceset
 
 
 def test_extract_peptide_length_range():
@@ -58,3 +58,28 @@ def test_new_vcf_mode_parsing():
     assert opts.normal_sample == "DNA_NORMAL"
     assert opts.rnaedit_known_only is False
     assert opts.rnaedit_known_key == "MY_KEY"
+
+
+def test_infer_source_set_from_info():
+    assert infer_source_set_from_info("AC=1;SOURCE_SET=RNA_EDIT;DP=10") == "RNA_EDIT"
+    assert infer_source_set_from_info("AC=1;SOMATIC;DP=10") == "SOMATIC"
+    assert infer_source_set_from_info("AC=1;GERMLINE;DP=10") == "GERMLINE"
+    assert infer_source_set_from_info("AC=1;DP=10") == "UNKNOWN"
+
+
+def test_vcf_has_sourceset(tmp_path):
+    p = tmp_path / "with_ss.vcf"
+    p.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTUMOR\tDNA_NORMAL\n"
+        "1\t10\t.\tA\tG\t.\tPASS\tSOURCE_SET=RNA_EDIT\tGT\t0/1\t0/0\n"
+    )
+    assert vcf_has_sourceset(str(p), None) is True
+
+    p2 = tmp_path / "without_ss.vcf"
+    p2.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTUMOR\tDNA_NORMAL\n"
+        "1\t10\t.\tA\tG\t.\tPASS\tDP=3\tGT\t0/1\t0/0\n"
+    )
+    assert vcf_has_sourceset(str(p2), None) is False
