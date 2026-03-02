@@ -2452,6 +2452,16 @@ def usage():
 
         Optional arguments affecting computational process:
         -F, --fork              Number of processors running VEP.                   2
+        --vcf-type              Input VCF caller style (mutect2/merged)            mutect2
+        --vcf_type              Alias for --vcf-type
+        --germlines             Include germline context variants (true/false)      false
+        --rna-edit              Include RNA_EDIT variants (true/false)              false
+        --rna_edit              Alias for --rna-edit
+        --tumor-sample          Explicit tumor sample column name in VCF
+        --normal-sample         Explicit normal sample column name in VCF
+        --rnaedit-known-only    Keep only RNA_EDIT variants marked as known         true
+        --rnaedit-allow-novel   Include novel RNA_EDIT variants (overrides known-only)
+        --rnaedit-known-key     INFO key used to mark known RNA edits               KNOWN_RNAEDIT_DB
         Other options (these do not take values)
         -f, --make-fasta        Create FASTA file with long peptides 
                                 - mutation in the middle
@@ -2475,6 +2485,14 @@ def usage():
 
 
 def read_options(argv):
+    def parse_bool_opt(value, name):
+        v = value.strip().lower()
+        if v in ('true', 't', '1', 'yes', 'y'):
+            return True
+        if v in ('false', 'f', '0', 'no', 'n'):
+            return False
+        sys.exit('ERROR: {} must be true/false'.format(name))
+
     try:
         optlist, args = getopt.getopt(argv,
                                       'v:z:a:l:o:d:L:e:c:p:E:m:A:F:s:nftMwgh',
@@ -2482,7 +2500,10 @@ def read_options(argv):
                                        'log-file=',
                                        'expression-file=', 'config-file=', 'prefix=', 'expression-type=',
                                        'mismatch-number=', 'assembly=', 'fork=', 'species=', 'netmhc-full-anal',
-                                       'make-fasta', 'keep-temp', 'mismatch-print', 'webserver', 'liftover', 'help'])
+                                       'make-fasta', 'keep-temp', 'mismatch-print', 'webserver', 'liftover', 'help',
+                                       'vcf-type=', 'vcf_type=', 'germlines=', 'rna-edit=', 'rna_edit=',
+                                       'tumor-sample=', 'normal-sample=', 'rnaedit-known-only',
+                                       'rnaedit-allow-novel', 'rnaedit-known-key='])
         if not optlist:
             print('No options supplied')
             usage()
@@ -2567,16 +2588,35 @@ def read_options(argv):
     species = opts['-s'] if '-s' in list(opts.keys()) else 'human'
     netmhc_anal = 'yes' if '-n' in list(opts.keys()) else None
 
+    vcf_type = opts.get('--vcf-type', opts.get('--vcf_type', 'mutect2')).strip().lower()
+    if vcf_type not in ('mutect2', 'merged'):
+        sys.exit('ERROR: --vcf-type must be one of: mutect2, merged')
+    germlines = parse_bool_opt(opts.get('--germlines', 'false'), '--germlines')
+    rna_edit = parse_bool_opt(opts.get('--rna-edit', opts.get('--rna_edit', 'false')), '--rna-edit')
+    tumor_sample = opts.get('--tumor-sample', None)
+    normal_sample = opts.get('--normal-sample', None)
+    rnaedit_known_only = True
+    if '--rnaedit-known-only' in opts:
+        rnaedit_known_only = True
+    if '--rnaedit-allow-novel' in opts:
+        rnaedit_known_only = False
+    rnaedit_known_key = opts.get('--rnaedit-known-key', 'KNOWN_RNAEDIT_DB').strip()
+    if not rnaedit_known_key:
+        sys.exit('ERROR: --rnaedit-known-key must be non-empty')
+
     # Create and fill input named-tuple
     Input = namedtuple('input',
                        ['vcf_file', 'fusion_file', 'peptide_length', 'output', 'logfile', 'HLA_alleles', 'config',
                         'expression_file',
                         'fasta_file_name', 'webserver', 'outdir', 'keep_temp', 'prefix', 'print_mismatch', 'liftover',
-                        'expression_type', 'num_mismatches', 'assembly', 'fork', 'species', 'netmhc_anal'])
+                        'expression_type', 'num_mismatches', 'assembly', 'fork', 'species', 'netmhc_anal',
+                        'vcf_type', 'germlines', 'rna_edit', 'tumor_sample', 'normal_sample',
+                        'rnaedit_known_only', 'rnaedit_known_key'])
     inputinfo = Input(vcf_file, fusion_file, peptide_length, output, logfile, HLA_alleles, config, expression_file,
                       fasta_file_name,
                       webserver, outdir, keep_temp, prefix, print_mismatch, liftover, expression_type, num_mismatches,
-                      assembly, fork, species, netmhc_anal)
+                      assembly, fork, species, netmhc_anal, vcf_type, germlines, rna_edit, tumor_sample, normal_sample,
+                      rnaedit_known_only, rnaedit_known_key)
 
     return inputinfo
 
