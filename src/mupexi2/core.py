@@ -2219,7 +2219,7 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
                       version, mode='SNV'):
     print_ifnot_webserver(f'\tWriting output file for {mode}-derived peptides', webserver)
     printed_ids = set()
-    row = 0
+    rows = []
 
     mupexi_core_cols = ['HLA_allele', 'Mut_peptide', 'Norm_peptide', 'Mismatches',
                         'Cancer_Driver_Gene', 'Expression_Level', 'Expression_score',
@@ -2244,19 +2244,15 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
     if net_mhc_BA is None:
         if mode == 'SNV':
             cols = mupexi_core_cols + net_mhc_EL_cols + normal_mhc_EL_cols + snv_cols
-            df = pandas.DataFrame(columns=cols, )
         elif mode == 'FUS':
             cols = mupexi_core_cols + net_mhc_EL_cols + normal_mhc_EL_cols + fusion_cols
-            df = pandas.DataFrame(columns=cols, )
     else:
         if mode == 'SNV':
             cols = mupexi_core_cols + net_mhc_EL_cols + \
                    net_mhc_BA_cols + normal_mhc_BA_cols + normal_mhc_EL_cols + snv_cols
-            df = pandas.DataFrame(columns=cols, )
         elif mode == 'FUS':
             cols = mupexi_core_cols + net_mhc_EL_cols + \
                    normal_mhc_EL_cols + normal_mhc_BA_cols + net_mhc_BA_cols + fusion_cols
-            df = pandas.DataFrame(columns=cols, )
 
         # Extract data
         for mutant_peptide in peptide_info:
@@ -2390,9 +2386,9 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
                                                 'Norm_MHCscore_BA': normal_netmhc_BA_info.score,
                                                 'Norm_MHCaffinity': normal_netmhc_BA_info.affinity})
 
-                    df.loc[row] = pandas.Series(row_content)[cols]
+                    rows.append({col: row_content.get(col, None) for col in cols})
 
-                row += 1
+    df = pandas.DataFrame.from_records(rows, columns=cols)
 
     # Sort, round up prioritization score
     print_ifnot_webserver('\tSorting output file', webserver)
@@ -2473,7 +2469,11 @@ def state_snv_qc(snv_qc, mutation_info):
             snv_qcs = snv_qc[snv_qc_id]
         else:
             snv_qcs = qc_none
-            print('\tSNV QC is {} not found; annotated as NA')
+            if not hasattr(state_snv_qc, '_missing_qc_ids'):
+                state_snv_qc._missing_qc_ids = set()
+            if snv_qc_id not in state_snv_qc._missing_qc_ids:
+                print('\tSNV QC for id {} not found; annotated as NA'.format(snv_qc_id))
+                state_snv_qc._missing_qc_ids.add(snv_qc_id)
     else:
         snv_qcs = qc_none
 
