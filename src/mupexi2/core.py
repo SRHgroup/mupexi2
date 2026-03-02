@@ -1070,7 +1070,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
     Mutation_Info = namedtuple('mutation_info',
                                ['gene_id', 'trans_id', 'mutation_consequence', 'chr', 'pos', 'cdna_pos', 'prot_pos',
                                 'prot_pos_to', 'aa_normal', 'aa_mut', 'codon_normal', 'codon_mut', 'alt_allele',
-                                'symbol','variant_type','nearby_germlines'])
+                                'symbol', 'variant_type', 'edit_sig', 'nearby_germlines'])
     transcript_info = defaultdict(dict)
     protein_positions = defaultdict(lambda: defaultdict(dict))
     if phasing_stats is None:
@@ -1084,6 +1084,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
     with open(vep_file.name) as f, open(vep_compatible_vcf.name) as vcf:
 
         variant_types = {}
+        variant_edit_sig = {}
         variant_phase = {}
         germline_positions = {}
         format_idx = None
@@ -1098,7 +1099,10 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
                 continue
             columns = line.strip().split("\t")
             chrom_pos = (columns[0], columns[1])
-            variant_types[chrom_pos] = infer_source_set_from_info(columns[7])
+            source_set = infer_source_set_from_info(columns[7])
+            variant_types[chrom_pos] = source_set
+            info_dict = parse_info_field(columns[7])
+            variant_edit_sig[chrom_pos] = info_dict.get('EDIT_SIG', 'NA') if source_set == 'RNA_EDIT' else 'NA'
             if format_idx is not None and tumor_idx is not None:
                 format_keys = columns[format_idx].split(':')
                 sample_values = columns[tumor_idx].split(':') if len(columns) > tumor_idx else []
@@ -1158,6 +1162,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             else:
                 prot_pos, prot_pos_to = line[9].strip(), None
             variant_type = variant_types.get((chr_, genome_pos), 'UNKNOWN')
+            edit_sig = variant_edit_sig.get((chr_, genome_pos), 'NA')
             if variant_type == 'GERMLINE':
                 # Germline variants are context-only and never become primary output rows.
                 continue
@@ -1177,7 +1182,8 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             # append information from the line to the list of named tuples - fill tuple
             vep_info.append(
                 Mutation_Info(geneID, transID, mutation_consequence, chr_, genome_pos, cdna_pos, int(prot_pos),
-                              prot_pos_to, aa_normal, aa_mutation, codon_normal, codon_mut, alt_allele, symbol, variant_type, nearby_germlines))
+                              prot_pos_to, aa_normal, aa_mutation, codon_normal, codon_mut, alt_allele, symbol,
+                              variant_type, edit_sig, nearby_germlines))
 
             # count independent mutation mutation consequences
             if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'missense_variant':
@@ -2155,6 +2161,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
         'Norm_peptide': Norm_peptide, 'Gene_ID': mutation_info.gene_id,
         'mutation_id_vep': mutation_id_vep, 'Transcript_ID': mutation_info.trans_id,
         'Mutation_Origin': 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC',
+        'edit_sig': mutation_info.edit_sig if mutation_info.variant_type == 'RNA_EDIT' else 'NA',
         'Amino_Acid_Change': '{}/{}'.format(mutation_info.aa_normal, mutation_info.aa_mut),
         'peptide_position': peptide_position, 'Chr': mutation_info.chr,
         'Genomic_Position': mutation_info.pos, 'Protein_position': mutation_info.prot_pos,
@@ -2224,7 +2231,7 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
     mupexi_core_cols = ['HLA_allele', 'Mut_peptide', 'Norm_peptide', 'Mismatches',
                         'Cancer_Driver_Gene', 'Expression_Level', 'Expression_score',
                         'Chr', 'Gene_ID', 'Gene_Symbol', 'Transcript_ID',
-                        'Mutation_Consequence', 'Mutation_Origin', 'has_germline', 'Germline_positions']  # mismatches should be in the core
+                        'Mutation_Consequence', 'Mutation_Origin', 'edit_sig', 'has_germline', 'Germline_positions']  # mismatches should be in the core
 
     net_mhc_EL_cols = ['Mut_MHCrank_EL', 'Mut_MHCscore_EL', 'Mutant_affinity_score']
     net_mhc_BA_cols = ['Mut_MHCrank_BA', 'Mut_MHCscore_BA', 'Mut_MHCaffinity']
