@@ -1221,32 +1221,53 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
 
 def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary_phase_state=None, variant_phase=None,
                          phasing_stats=None):
+    def parse_interval(pos_str):
+        if pos_str is None:
+            return None
+        token = str(pos_str).strip()
+        if not token:
+            return None
+        if '-' in token:
+            pieces = token.split('-')
+            if len(pieces) != 2:
+                return None
+            try:
+                a = int(pieces[0])
+                b = int(pieces[1])
+            except ValueError:
+                return None
+            return (min(a, b), max(a, b))
+        try:
+            x = int(token)
+        except ValueError:
+            return None
+        return (x, x)
+
+    def interval_distance(a1, a2, b1, b2):
+        if a2 < b1:
+            return b1 - a2
+        if b2 < a1:
+            return a1 - b2
+        return 0
+
     nearby_germlines = {}
     max_distance = peptide_length[-1] * 3
     variant_phase = variant_phase if variant_phase is not None else {}
     phasing_stats = phasing_stats if phasing_stats is not None else {}
     phasing_stats.setdefault('skipped_unphased_het_germline_context', 0)
     phasing_stats.setdefault('applied_context_records', 0)
+    pos_interval = parse_interval(pos)
+    if pos_interval is None:
+        return None
+
     for (g_chrom, g_pos), info in germline_positions.items():
         candidate_phase_state = variant_phase.get((g_chrom, g_pos), None)
         is_near = False
-        if germline_positions[(g_chrom, g_pos)][0] == 'missense_variant':
-            if '-' in g_pos or '-' in pos:
-                continue
-            if g_chrom == chrom and abs(int(g_pos) - int(pos)) <= max_distance:
-                is_near = True
-        elif germline_positions[(g_chrom, g_pos)][0] == 'inframe_insertion':
-            start, stop = g_pos.split('-')
-            if '-' in g_pos or '-' in pos:
-                continue
-            if g_chrom == chrom and (abs(int(start)-int(pos)) <= max_distance or abs(int(stop)-int(pos)) <= max_distance):
-                is_near = True
-        elif germline_positions[(g_chrom, g_pos)][0] == 'inframe_deletion':
-            start, stop = g_pos.split('-')
-            if '-' in g_pos or '-' in pos:
-                continue
-            if g_chrom == chrom and abs(int(start)-int(pos)) <= max_distance:
-                is_near = True
+        g_interval = parse_interval(g_pos)
+        if g_interval is None:
+            continue
+        if g_chrom == chrom and interval_distance(pos_interval[0], pos_interval[1], g_interval[0], g_interval[1]) <= max_distance:
+            is_near = True
         if not is_near:
             continue
 
