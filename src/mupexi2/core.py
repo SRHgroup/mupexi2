@@ -2143,10 +2143,6 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
                                             transcript_info[mutation_id_vep][mutation_info.gene_id],
                                             proteome_reference, normal_peptide,
                                             peptide_sequence_info.consequence)
-    # Extract protein position
-    protein_positions_extracted = extract_protein_position(transcript_ids, mutation_id_vep,
-                                                           mutation_info.gene_id, protein_positions)
-
     snv_qcs = state_snv_qc(snv_qc, mutation_info)
 
     # Extract cancer genes if file is given
@@ -2160,7 +2156,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
         'mutation_id_vep': mutation_id_vep, 'Transcript_ID': mutation_info.trans_id,
         'Mutation_Origin': 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC',
         'Amino_Acid_Change': '{}/{}'.format(mutation_info.aa_normal, mutation_info.aa_mut),
-        'peptide_position': protein_positions_extracted, 'Chr': mutation_info.chr,
+        'peptide_position': peptide_position, 'Chr': mutation_info.chr,
         'Genomic_Position': mutation_info.pos, 'Protein_position': mutation_info.prot_pos,
         'Mutation_Consequence': mutation_info.mutation_consequence,
         'Gene_Symbol': '-' if mutation_info.symbol is None else mutation_info.symbol,
