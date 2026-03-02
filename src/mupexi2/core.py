@@ -74,6 +74,8 @@ def main(args):
                                  input_.prefix, tmp_dir, input_.config)
         if (input_.germlines or input_.rna_edit) and not vcf_has_sourceset(vcf_file, input_.liftover):
             sys.exit('ERROR: SOURCE_SET is required when --germlines=true or --rna-edit=true')
+        check_phasing_requirements(vcf_file, input_.liftover, input_.webserver, input_.germlines, input_.rna_edit,
+                                   input_.tumor_sample, input_.normal_sample)
         vcf_sorted_file = create_vep_compatible_vcf(vcf_file, input_.webserver, input_.keep_temp, input_.outdir,
                                                     input_.prefix, tmp_dir, input_.liftover, input_.germlines,
                                                     input_.rna_edit, input_.rnaedit_known_only,
@@ -83,7 +85,8 @@ def main(args):
                                 input_.normal_sample)
         vep_file = run_vep(vcf_sorted_file, input_.webserver, tmp_dir, paths.vep_path, paths.vep_dir, input_.keep_temp,
                            input_.prefix, input_.outdir, input_.assembly, input_.fork, species)
-        vep_info, vep_counters, transcript_info, protein_positions = build_vep_info(vep_file, input_.webserver, vcf_sorted_file, peptide_length)
+        vep_info, vep_counters, transcript_info, protein_positions = build_vep_info(
+            vep_file, input_.webserver, vcf_sorted_file, peptide_length, input_.tumor_sample, input_.normal_sample)
 
         end_time_vep = datetime.now()
 
@@ -621,6 +624,82 @@ def vcf_has_sourceset(vcf_file, liftover):
     return False
 
 
+def parse_genotype_state(gt_value, ps_value):
+    gt = (gt_value or '').strip()
+    ps = (ps_value or '').strip()
+    if gt in ('.', './.', '.|.', ''):
+        return {'is_hom_alt': False, 'is_phased': False, 'hap': None, 'ps': None}
+
+    is_hom_alt = gt in ('1/1', '1|1')
+    is_phased = '|' in gt and ps not in ('', '.')
+    hap = None
+    if is_phased:
+        left, right = gt.split('|', 1)
+        if left == '1' and right == '0':
+            hap = 0
+        elif left == '0' and right == '1':
+            hap = 1
+        elif left == '1' and right == '1':
+            hap = 'both'
+    return {'is_hom_alt': is_hom_alt, 'is_phased': is_phased, 'hap': hap, 'ps': ps if ps not in ('', '.') else None}
+
+
+def should_apply_context_variant(primary_state, context_state):
+    if context_state is None:
+        return False
+    if context_state['is_hom_alt']:
+        return True
+    if primary_state is None:
+        return False
+    if not primary_state['is_phased'] or not context_state['is_phased']:
+        return False
+    if primary_state['ps'] is None or context_state['ps'] is None:
+        return False
+    return primary_state['ps'] == context_state['ps'] and primary_state['hap'] == context_state['hap']
+
+
+def check_phasing_requirements(vcf_file, liftover, webserver, germlines=False, rna_edit=False, tumor_sample=None,
+                               normal_sample=None):
+    vcf_file_name = vcf_file if liftover is None else vcf_file.name
+    has_unphased_primary = False
+    with open(vcf_file_name) as f:
+        tumor_idx = None
+        format_idx = None
+        info_idx = None
+        for line in f:
+            if line.startswith('##'):
+                continue
+            if line.startswith('#'):
+                header = [re.sub(r'\n|#', '', field) for field in line.split('\t')]
+                format_idx = header.index('FORMAT')
+                tumor_idx, _, _, _ = resolve_sample_indices(header, tumor_sample, normal_sample)
+                continue
+
+            fields = line.rstrip('\n').split('\t')
+            if tumor_idx is None or format_idx is None or info_idx is None:
+                info_idx = 7
+            source_set = infer_source_set_from_info(fields[7])
+            if source_set not in ('GERMLINE', 'SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
+                continue
+
+            format_keys = fields[format_idx].split(':')
+            sample_values = fields[tumor_idx].split(':') if len(fields) > tumor_idx else []
+            sample_map = dict(zip(format_keys, sample_values))
+            state = parse_genotype_state(sample_map.get('GT', ''), sample_map.get('PS', ''))
+
+            if germlines and source_set == 'GERMLINE' and not state['is_hom_alt'] and not state['is_phased']:
+                sys.exit('ERROR: germlines=true requires phased VCF for non-homozygous germline calls')
+
+            if (not germlines) and rna_edit and source_set in ('SOMATIC', 'RNA_EDIT') and not state['is_hom_alt'] \
+                    and not state['is_phased']:
+                has_unphased_primary = True
+
+    if has_unphased_primary:
+        print_ifnot_webserver(
+            '\tWARNING: VCF not phased for some primary variants; adjacent context substitutions will not be applied',
+            webserver)
+
+
 def liftover_hg19(liftover, webserver, vcf_file, keep_tmp, outdir, file_prefix, tmp_dir, config_file):
     if liftover is not None:
         print_ifnot_webserver('\tPerforming Liftover', webserver)
@@ -934,7 +1013,7 @@ def run_vep(vcf_sorted_file, webserver, tmp_dir, vep_path, vep_dir, keep_tmp, fi
     return vep_file
 
 
-def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length):
+def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumor_sample=None, normal_sample=None):
     print_ifnot_webserver('\tCreating mutation information dictionary', webserver)
     vep_info = []  # empty list
     previous_mutation_id = previous_mutation_id_vep = ''  # empty string
@@ -953,14 +1032,26 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length):
     with open(vep_file.name) as f, open(vep_compatible_vcf.name) as vcf:
 
         variant_types = {}
+        variant_phase = {}
         germline_positions = {}
+        format_idx = None
+        tumor_idx = None
 
         for line in vcf.readlines():
             if line.startswith('#'):
+                if line.startswith('#CHROM'):
+                    header = [re.sub(r'\n|#', '', field) for field in line.split('\t')]
+                    format_idx = header.index('FORMAT')
+                    tumor_idx, _, _, _ = resolve_sample_indices(header, tumor_sample, normal_sample)
                 continue
             columns = line.strip().split("\t")
             chrom_pos = (columns[0], columns[1])
             variant_types[chrom_pos] = infer_source_set_from_info(columns[7])
+            if format_idx is not None and tumor_idx is not None:
+                format_keys = columns[format_idx].split(':')
+                sample_values = columns[tumor_idx].split(':') if len(columns) > tumor_idx else []
+                sample_map = dict(zip(format_keys, sample_values))
+                variant_phase[chrom_pos] = parse_genotype_state(sample_map.get('GT', ''), sample_map.get('PS', ''))
 
         for line in f.readlines():
             if line.startswith('#'):
@@ -1015,10 +1106,14 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length):
             else:
                 prot_pos, prot_pos_to = line[9].strip(), None
             variant_type = variant_types.get((chr_, genome_pos), 'UNKNOWN')
-            if variant_type == 'SOMATIC':
-                nearby_germlines = get_nearby_germlines(chr_, genome_pos, germline_positions, peptide_length)
-            elif variant_type == 'GERMLINE':
-                nearby_germlines = None
+            if variant_type == 'GERMLINE':
+                # Germline variants are context-only and never become primary output rows.
+                continue
+
+            primary_phase_state = variant_phase.get((chr_, genome_pos), None)
+            if variant_type in ('SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
+                nearby_germlines = get_nearby_germlines(chr_, genome_pos, germline_positions, peptide_length,
+                                                        primary_phase_state, variant_phase)
             else:
                 nearby_germlines = None
             mutation_id_vep = '{}_{}_{}/{}'.format(chr_, genome_pos, aa_normal, aa_mutation)
@@ -1068,10 +1163,14 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length):
 
 #### function to get germlines surrounding a somatic with a given peptide length. returns a dict with position:AAchange
 
-def get_nearby_germlines(chrom, pos, germline_positions, peptide_length):
+def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary_phase_state=None, variant_phase=None):
     nearby_germlines = {}
-    max_distance = peptide_length[-1]*3
+    max_distance = peptide_length[-1] * 3
+    variant_phase = variant_phase if variant_phase is not None else {}
     for (g_chrom, g_pos), info in germline_positions.items():
+        candidate_phase_state = variant_phase.get((g_chrom, g_pos), None)
+        if not should_apply_context_variant(primary_phase_state, candidate_phase_state):
+            continue
         if germline_positions[(g_chrom, g_pos)][0] == 'missense_variant':
             if '-' in g_pos or '-' in pos:
                 continue
@@ -1969,6 +2068,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     return {**{
         'Norm_peptide': Norm_peptide, 'Gene_ID': mutation_info.gene_id,
         'mutation_id_vep': mutation_id_vep, 'Transcript_ID': mutation_info.trans_id,
+        'Mutation_Origin': 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC',
         'Amino_Acid_Change': '{}/{}'.format(mutation_info.aa_normal, mutation_info.aa_mut),
         'peptide_position': protein_positions_extracted, 'Chr': mutation_info.chr,
         'Genomic_Position': mutation_info.pos, 'Protein_position': mutation_info.prot_pos,
@@ -1977,7 +2077,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
         'Cancer_Driver_Gene': cancer_gene, 'Mismatches': Mismatches,
         'Proteome_Peptide_Match': 'Yes' if mutant_peptide in reference_peptides else 'No'},
          **snv_qcs,
-        'Has_germline':has_germline,
+        'has_germline': has_germline,
         'Germline_positions':germline_positions}
 
 
@@ -2038,7 +2138,7 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
     mupexi_core_cols = ['HLA_allele', 'Mut_peptide', 'Norm_peptide', 'Mismatches',
                         'Cancer_Driver_Gene', 'Expression_Level', 'Expression_score',
                         'Chr', 'Gene_ID', 'Gene_Symbol', 'Transcript_ID',
-                        'Mutation_Consequence', 'Has_germline', 'Germline_positions']  # mismatches should be in the core
+                        'Mutation_Consequence', 'Mutation_Origin', 'has_germline', 'Germline_positions']  # mismatches should be in the core
 
     net_mhc_EL_cols = ['Mut_MHCrank_EL', 'Mut_MHCscore_EL', 'Mutant_affinity_score']
     net_mhc_BA_cols = ['Mut_MHCrank_BA', 'Mut_MHCscore_BA', 'Mut_MHCaffinity']

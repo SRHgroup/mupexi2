@@ -5,6 +5,8 @@ import sys
 import pytest
 
 from mupexi2.core import (
+    parse_genotype_state,
+    should_apply_context_variant,
     create_vep_compatible_vcf,
     extract_peptide_length,
     infer_source_set_from_info,
@@ -122,3 +124,13 @@ def test_resolve_sample_indices_new_names():
     assert n_idx == 9
     assert t_name == "TUMOR"
     assert n_name == "DNA_NORMAL"
+
+
+def test_parse_genotype_state_and_context_rule():
+    primary = parse_genotype_state("0|1", "17005")
+    same_hap = parse_genotype_state("0|1", "17005")
+    other_hap = parse_genotype_state("1|0", "17005")
+    hom_alt = parse_genotype_state("1/1", "")
+    assert should_apply_context_variant(primary, same_hap) is True
+    assert should_apply_context_variant(primary, other_hap) is False
+    assert should_apply_context_variant(primary, hom_alt) is True
