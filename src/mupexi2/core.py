@@ -22,6 +22,7 @@ from six.moves.configparser import ConfigParser
 from tempfile import NamedTemporaryFile
 import psutil
 import sys, re, getopt, itertools, warnings, string, subprocess, os, os.path, math, tempfile, shutil, numpy, pandas
+import gzip
 import six
 from six.moves import zip
 import warnings
@@ -304,13 +305,19 @@ def check_path(path):
             sys.exit('ERROR: {} path or file does not exist\n'.format(path))
 
 
+def open_text_maybe_gzip(path):
+    if str(path).endswith('.gz'):
+        return gzip.open(path, 'rt')
+    return open(path)
+
+
 def check_vcf_file(vcf_file, liftover, species, webserver):
     check_path(vcf_file)
 
     # Exit program if file size are exceeded
     check_file_size(webserver, vcf_file, 'VCF file')
 
-    with open(vcf_file) as f:
+    with open_text_maybe_gzip(vcf_file) as f:
         first_line = f.readline()
         if not first_line.startswith('##fileformat=VCF'):
             usage()
@@ -565,7 +572,7 @@ VEP
 
 def detect_variant_caller(vcf_file, webserver):
     print_ifnot_webserver('\tDetecting variant caller', webserver)
-    with open(vcf_file) as f:
+    with open_text_maybe_gzip(vcf_file) as f:
         for line in f.readlines():
             if any(ids in line for ids in ['ID=MuTect2,', 'ID=Mutect2,']):
                 variant_caller = 'MuTect2'
@@ -614,7 +621,7 @@ def infer_source_set_from_info(info_field):
 
 def vcf_has_sourceset(vcf_file, liftover):
     vcf_file_name = vcf_file if liftover is None else vcf_file.name
-    with open(vcf_file_name) as f:
+    with open_text_maybe_gzip(vcf_file_name) as f:
         for line in f:
             if line.startswith('#'):
                 continue
@@ -662,7 +669,7 @@ def check_phasing_requirements(vcf_file, liftover, webserver, germlines=False, r
                                normal_sample=None):
     vcf_file_name = vcf_file if liftover is None else vcf_file.name
     has_unphased_primary = False
-    with open(vcf_file_name) as f:
+    with open_text_maybe_gzip(vcf_file_name) as f:
         tumor_idx = None
         format_idx = None
         info_idx = None
@@ -745,7 +752,7 @@ def create_vep_compatible_vcf(vcf_file, webserver, keep_tmp, outdir, file_prefix
     print_ifnot_webserver('\tChange VCF to the VEP compatible', webserver)
     vcf_file_name = vcf_file if liftover is None else vcf_file.name
     vcf_sorted_file = NamedTemporaryFile(delete=False, dir=tmp_dir)
-    with open(vcf_file_name) as source, open(vcf_sorted_file.name, 'w') as out:
+    with open_text_maybe_gzip(vcf_file_name) as source, open(vcf_sorted_file.name, 'w') as out:
         for line in source:
             if line.startswith('#'):
                 out.write(line)
