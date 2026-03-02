@@ -75,9 +75,12 @@ def main(args):
         if (input_.germlines or input_.rna_edit) and not vcf_has_sourceset(vcf_file, input_.liftover):
             sys.exit('ERROR: SOURCE_SET is required when --germlines=true or --rna-edit=true')
         vcf_sorted_file = create_vep_compatible_vcf(vcf_file, input_.webserver, input_.keep_temp, input_.outdir,
-                                                    input_.prefix, tmp_dir, input_.liftover)
+                                                    input_.prefix, tmp_dir, input_.liftover, input_.germlines,
+                                                    input_.rna_edit, input_.rnaedit_known_only,
+                                                    input_.rnaedit_known_key)
 
-        snv_qc = extract_snv_qc(vcf_sorted_file, input_.webserver, variant_caller)
+        snv_qc = extract_snv_qc(vcf_sorted_file, input_.webserver, variant_caller, input_.tumor_sample,
+                                input_.normal_sample)
         vep_file = run_vep(vcf_sorted_file, input_.webserver, tmp_dir, paths.vep_path, paths.vep_dir, input_.keep_temp,
                            input_.prefix, input_.outdir, input_.assembly, input_.fork, species)
         vep_info, vep_counters, transcript_info, protein_positions = build_vep_info(vep_file, input_.webserver, vcf_sorted_file, peptide_length)
@@ -658,21 +661,83 @@ def liftover_hg19(liftover, webserver, vcf_file, keep_tmp, outdir, file_prefix, 
     return vcf_final_file
 
 
-def create_vep_compatible_vcf(vcf_file, webserver, keep_tmp, outdir, file_prefix, tmp_dir, liftover):
+def create_vep_compatible_vcf(vcf_file, webserver, keep_tmp, outdir, file_prefix, tmp_dir, liftover, germlines=False,
+                              rna_edit=False, rnaedit_known_only=True, rnaedit_known_key='KNOWN_RNAEDIT_DB'):
     print_ifnot_webserver('\tChange VCF to the VEP compatible', webserver)
-    # remove chr and 0 so only integers are left, (chromosome: 1, 2, 3 instaed og chr01, chr02, chr03)
-    # only PASS lines are used
-
     vcf_file_name = vcf_file if liftover is None else vcf_file.name
     vcf_sorted_file = NamedTemporaryFile(delete=False, dir=tmp_dir)
-    p1 = subprocess.Popen(['awk', '{gsub(/^chr/,"");gsub(/^0/,"");print}', vcf_file_name], stdout=subprocess.PIPE)
-    p2 = subprocess.Popen(['grep', '-E', '#|PASS'], stdin=p1.stdout, stdout=vcf_sorted_file)
-    p2.communicate()
+    with open(vcf_file_name) as source, open(vcf_sorted_file.name, 'w') as out:
+        for line in source:
+            if line.startswith('#'):
+                out.write(line)
+                continue
+
+            columns = line.rstrip('\n').split('\t')
+            if len(columns) < 8:
+                continue
+
+            chrom = re.sub(r'^chr', '', columns[0])
+            if re.match(r'^0[0-9]+$', chrom):
+                chrom = chrom.lstrip('0')
+            columns[0] = chrom if chrom else '0'
+
+            source_set = infer_source_set_from_info(columns[7])
+            filter_value = columns[6].strip()
+            info_fields = parse_info_field(columns[7])
+            keep_record = False
+
+            if source_set == 'SOMATIC':
+                keep_record = filter_value == 'PASS'
+            elif source_set == 'GERMLINE':
+                keep_record = germlines and filter_value == 'PASS'
+            elif source_set == 'RNA_EDIT':
+                if rna_edit:
+                    keep_record = (rnaedit_known_key in info_fields) if rnaedit_known_only else True
+            else:
+                # Legacy mutect2 style: keep PASS.
+                keep_record = filter_value == 'PASS'
+
+            if keep_record:
+                out.write('\t'.join(columns) + '\n')
     vcf_sorted_file.close()
 
     keep_temp_file(keep_tmp, 'vcf', vcf_sorted_file.name, file_prefix, outdir, None, 'vep_compatible_vcf')
 
     return vcf_sorted_file
+
+
+def resolve_sample_indices(header, tumor_sample=None, normal_sample=None):
+    sample_names = header[9:]
+    sample_index = {name: i + 9 for i, name in enumerate(sample_names)}
+
+    def find_unique(candidates):
+        hits = [name for name in sample_names if candidates(name)]
+        return hits[0] if len(hits) == 1 else None
+
+    if tumor_sample is not None and tumor_sample not in sample_index:
+        sys.exit('ERROR: tumor sample "{}" is not present in VCF header'.format(tumor_sample))
+    if normal_sample is not None and normal_sample not in sample_index:
+        sys.exit('ERROR: normal sample "{}" is not present in VCF header'.format(normal_sample))
+
+    tumor_name = tumor_sample
+    normal_name = normal_sample
+
+    if tumor_name is None:
+        tumor_name = find_unique(lambda n: n == 'TUMOR') or \
+                     find_unique(lambda n: n.endswith('_T') or n.endswith('-T') or n.endswith('.T')) or \
+                     find_unique(lambda n: 'TUMOR' in n.upper())
+    if normal_name is None:
+        normal_name = find_unique(lambda n: n in ('NORMAL', 'DNA_NORMAL')) or \
+                      find_unique(lambda n: n.endswith('_N') or n.endswith('-N') or n.endswith('.N')) or \
+                      find_unique(lambda n: 'NORMAL' in n.upper())
+
+    if tumor_name is None or normal_name is None or tumor_name == normal_name:
+        if len(sample_names) < 2:
+            sys.exit('ERROR: VCF must contain at least two sample columns for SNV QC extraction')
+        tumor_name = sample_names[0]
+        normal_name = sample_names[1]
+
+    return sample_index[tumor_name], sample_index[normal_name], tumor_name, normal_name
 
 
 def extract_tumor_vaf(vcf_sorted_file, webserver, variant_caller, tumor_prefix='_T'):
@@ -731,7 +796,7 @@ def extract_tumor_vaf(vcf_sorted_file, webserver, variant_caller, tumor_prefix='
     return allele_fractions
 
 
-def extract_snv_qc(vcf_sorted_file, webserver, variant_caller):
+def extract_snv_qc(vcf_sorted_file, webserver, variant_caller, tumor_sample=None, normal_sample=None):
     """
     :param vcf_sorted_file: vcf file as the output of create_vep_compatible_vcf() function
     :param webserver: bool, whether you perform analysis on the webserver
@@ -741,68 +806,92 @@ def extract_snv_qc(vcf_sorted_file, webserver, variant_caller):
     {mutation_id : {tumor_vaf, normal_vaf, tumor_depth, normal_depth, alt_read_counts}}
     """
 
-    print_ifnot_webserver('\tExtracting allele frequencies', webserver)
+    print_ifnot_webserver('\tExtracting SNV QC metrics', webserver)
     snv_qc = defaultdict(dict)
+    with open(vcf_sorted_file.name) as f:
+        for line in f.readlines():
+            if line.startswith('##'):
+                continue
+            elif line.startswith('#'):
+                header = line.split('\t')
+                header = [re.sub(r'\n|#', '', file) for file in header]
 
-    if variant_caller not in ('MuTect', 'MuTect2'):
-        snv_qc = None  # no variant caller detected
-    else:
-        with open(vcf_sorted_file.name) as f:
-            for line in f.readlines():
-                if line.startswith('##'):
+                chr_i = header.index('CHROM')
+                pos_i = header.index('POS')
+                ref_i = header.index('REF')
+                alt_i = header.index('ALT')
+                info_i = header.index('INFO')
+                format_i = header.index('FORMAT')
+
+                tumor_meta_i, normal_meta_i, detected_tumor, detected_normal = resolve_sample_indices(
+                    header, tumor_sample, normal_sample)
+                if tumor_sample is None or normal_sample is None:
+                    print_ifnot_webserver('\t\tUsing samples tumor="{}" normal="{}" for QC'.format(
+                        detected_tumor, detected_normal), webserver)
+            else:
+                columns = line.split('\t')
+                chromosome = columns[chr_i].strip()
+                genomic_position = columns[pos_i].strip()
+                reference_allele = columns[ref_i].strip()
+                altered_allele = columns[alt_i].strip()
+                source_set = infer_source_set_from_info(columns[info_i].strip())
+                if source_set == 'GERMLINE':
                     continue
-                elif line.startswith('#'):
-                    header = line.split('\t')
-                    header = [re.sub(r'\n|#', '', file) for file in header]
 
-                    chr_i = header.index('CHROM')
-                    pos_i = header.index('POS')
-                    ref_i = header.index('REF')
-                    alt_i = header.index('ALT')
-                    format_i = header.index('FORMAT')
+                if not len(reference_allele) == len(altered_allele):
+                    altered_allele = altered_allele[1:] if len(reference_allele) < len(altered_allele) else altered_allele
+                    altered_allele = '-' if len(reference_allele) > len(altered_allele) else altered_allele
 
-                    tumor_meta_i = [i for i, item in enumerate(header) if item.endswith('_T')][0]
-                    normal_meta_i = [i for i, item in enumerate(header) if item.endswith('_N')][0]
-                    ### BUG ALERT, will only work with _T _N as a marker of normal/tumor samples ###
+                format_fields = columns[format_i].strip().split(':')
+                tumor_values = columns[tumor_meta_i].strip().split(':')
+                normal_values = columns[normal_meta_i].strip().split(':')
+                tumor_map = dict(zip(format_fields, tumor_values))
+                normal_map = dict(zip(format_fields, normal_values))
+
+                preferred_vaf_key = 'FA' if variant_caller == 'MuTect' else 'AF'
+                vaf_column = preferred_vaf_key if preferred_vaf_key in format_fields else (
+                    'AF' if 'AF' in format_fields else ('FA' if 'FA' in format_fields else None))
+
+                def parse_ad(ad_value):
+                    if ad_value is None or ad_value in ('.', './.'):
+                        return None
+                    parts = ad_value.split(',')
+                    if len(parts) < 2:
+                        return None
+                    try:
+                        ref = int(parts[0])
+                        alt = int(parts[1])
+                    except ValueError:
+                        return None
+                    return ref, alt
+
+                tumor_ad = parse_ad(tumor_map.get('AD'))
+                normal_ad = parse_ad(normal_map.get('AD'))
+
+                if vaf_column is not None:
+                    tumor_vaf = tumor_map.get(vaf_column, 'NA')
+                    normal_vaf = normal_map.get(vaf_column, 'NA')
                 else:
-                    columns = line.split('\t')
-                    chromosome = columns[chr_i].strip()
-                    genomic_position = columns[pos_i].strip()
-                    reference_allele = columns[ref_i].strip()
-                    altered_allele = columns[alt_i].strip()
-                    format_fields = columns[format_i].strip().split(':')
-                    is_germline = columns[9].split(':')[-2] == "GERMLINE" #### Checking if the variant is germline
-                    if is_germline: #### Skipping germline variants for snv_qc
-                        continue
-                    if not len(reference_allele) == len(altered_allele):
-                        altered_allele = altered_allele[1:] if len(reference_allele) < len(
-                            altered_allele) else altered_allele
-                        altered_allele = '-' if len(reference_allele) > len(altered_allele) else altered_allele
+                    tumor_vaf = 'NA'
+                    normal_vaf = 'NA'
 
-                    if variant_caller == 'MuTect':  # GT:AD:BQ:DP:FA
-                        vaf_column = 'FA'
-                    elif variant_caller == 'MuTect2':  # GT:AD:AF:ALT_F1R2:ALT_F2R1:FOXOG:QSS:REF_F1R2:REF_F2R1
-                        vaf_column = 'AF'
+                if tumor_vaf in ('NA', '.', './.') and tumor_ad is not None:
+                    t_depth_calc = tumor_ad[0] + tumor_ad[1]
+                    tumor_vaf = '{:.6g}'.format(float(tumor_ad[1]) / t_depth_calc) if t_depth_calc > 0 else 'NA'
+                if normal_vaf in ('NA', '.', './.') and normal_ad is not None:
+                    n_depth_calc = normal_ad[0] + normal_ad[1]
+                    normal_vaf = '{:.6g}'.format(float(normal_ad[1]) / n_depth_calc) if n_depth_calc > 0 else 'NA'
 
-                    tumor_vaf = columns[tumor_meta_i].split(':')[
-                        format_fields.index(vaf_column)].strip()
-                    normal_vaf = columns[normal_meta_i].split(':')[
-                        format_fields.index(vaf_column)].strip()
+                t_alt_count = tumor_ad[1] if tumor_ad is not None else 'NA'
+                t_depth = (tumor_ad[0] + tumor_ad[1]) if tumor_ad is not None else 'NA'
+                n_depth = (normal_ad[0] + normal_ad[1]) if normal_ad is not None else 'NA'
 
-                    tumor_ad = columns[tumor_meta_i].split(':')[format_fields.index('AD')].strip().split(',')
-                    normal_ad = columns[normal_meta_i].split(':')[format_fields.index('AD')].strip().split(',')
-
-                    t_alt_count = tumor_ad[1]
-
-                    t_depth = int(tumor_ad[0]) + int(tumor_ad[1])
-                    n_depth = int(normal_ad[0]) + int(normal_ad[1])
-
-                    ID = '{chromosome}_{genomic_position}_{altered_allele}'.format(
-                        chromosome=chromosome,
-                        genomic_position=genomic_position if not altered_allele == '-' else int(genomic_position) + 1,
-                        altered_allele=altered_allele)
-                    snv_qc[ID] = {'tumor_vaf': tumor_vaf, 'normal_vaf': normal_vaf,
-                                  't_depth': t_depth, 'n_depth': n_depth, 't_alt_count': t_alt_count}
+                ID = '{chromosome}_{genomic_position}_{altered_allele}'.format(
+                    chromosome=chromosome,
+                    genomic_position=genomic_position if not altered_allele == '-' else int(genomic_position) + 1,
+                    altered_allele=altered_allele)
+                snv_qc[ID] = {'tumor_vaf': tumor_vaf, 'normal_vaf': normal_vaf,
+                              't_depth': t_depth, 'n_depth': n_depth, 't_alt_count': t_alt_count}
 
     return snv_qc
 

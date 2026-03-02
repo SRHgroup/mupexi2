@@ -4,7 +4,14 @@ import sys
 
 import pytest
 
-from mupexi2.core import extract_peptide_length, infer_source_set_from_info, read_options, vcf_has_sourceset
+from mupexi2.core import (
+    create_vep_compatible_vcf,
+    extract_peptide_length,
+    infer_source_set_from_info,
+    read_options,
+    resolve_sample_indices,
+    vcf_has_sourceset,
+)
 
 
 def test_extract_peptide_length_range():
@@ -83,3 +90,35 @@ def test_vcf_has_sourceset(tmp_path):
         "1\t10\t.\tA\tG\t.\tPASS\tDP=3\tGT\t0/1\t0/0\n"
     )
     assert vcf_has_sourceset(str(p2), None) is False
+
+
+def test_create_vep_compatible_vcf_filters_rna_edit_known_only(tmp_path):
+    vcf = tmp_path / "input.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tTUMOR\tDNA_NORMAL\n"
+        "chr1\t10\t.\tA\tG\t.\tPASS\tSOURCE_SET=SOMATIC\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+        "chr1\t11\t.\tA\tT\t.\tq10\tSOURCE_SET=SOMATIC\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+        "chr1\t12\t.\tA\tC\t.\tstrand_bias\tSOURCE_SET=RNA_EDIT;KNOWN_RNAEDIT_DB=REDIportal\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+        "chr1\t13\t.\tA\tC\t.\tstrand_bias\tSOURCE_SET=RNA_EDIT\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+        "chr1\t14\t.\tA\tC\t.\tPASS\tSOURCE_SET=GERMLINE\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+    )
+    out = create_vep_compatible_vcf(
+        str(vcf), None, None, str(tmp_path), "x", str(tmp_path), None,
+        germlines=True, rna_edit=True, rnaedit_known_only=True, rnaedit_known_key="KNOWN_RNAEDIT_DB"
+    )
+    with open(out.name) as fh:
+        lines = [ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")]
+    assert len(lines) == 3
+    assert lines[0].startswith("1\t10")
+    assert any("\t12\t" in ln for ln in lines)
+    assert any("\t14\t" in ln for ln in lines)
+
+
+def test_resolve_sample_indices_new_names():
+    header = ["CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", "DNA_NORMAL", "TUMOR"]
+    t_idx, n_idx, t_name, n_name = resolve_sample_indices(header)
+    assert t_idx == 10
+    assert n_idx == 9
+    assert t_name == "TUMOR"
+    assert n_name == "DNA_NORMAL"
