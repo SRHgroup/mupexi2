@@ -106,7 +106,8 @@ def main(args):
                                                  reference_peptides, reference_peptide_file_names,
                                                  input_.fasta_file_name,
                                                  paths.peptide_match, tmp_dir, input_.webserver, input_.print_mismatch,
-                                                 input_.keep_temp, input_.prefix, input_.outdir, input_.num_mismatches)
+                                                 input_.keep_temp, input_.prefix, input_.outdir, input_.num_mismatches,
+                                                 input_.superpeptides)
 
         """
         MuPeI: Mutant peptide Informer 
@@ -1469,7 +1470,7 @@ def chopchop(aaSeq, peptide_length, mut_type='SNV', reading_frame='in-frame'):
 
 def peptide_extraction(peptide_lengths, vep_info, proteome_reference, genome_reference, reference_peptides,
                        reference_peptide_file_names, fasta_file_name, peptide_match, tmp_dir, webserver, print_mismatch,
-                       keep_tmp, file_prefix, outdir, num_mismatches):
+                       keep_tmp, file_prefix, outdir, num_mismatches, superpeptides=False):
     print_ifnot_webserver('\tPeptide extraction begun', webserver)
     peptide_count, normal_match_count, removal_count = 0, 0, 0
     peptide_info = defaultdict(dict)  # empty dictionary
@@ -1484,24 +1485,26 @@ def peptide_extraction(peptide_lengths, vep_info, proteome_reference, genome_ref
                                              'peptide_removal_count': 0}
             # extract sequence
             peptide_sequence_info = mutation_sequence_creation(mutation_info, proteome_reference, genome_reference,
-                                                               p_length)
+                                                               p_length, superpeptides)
             if peptide_sequence_info is not None:
-                if fasta_printout is not None:
-                    fasta_printout = long_peptide_fasta_creation(peptide_sequence_info, mutation_info, fasta_printout)
-                normpeps, mutpeps = chopchop(peptide_sequence_info.chop_normal_sequence, p_length), chopchop(
-                    peptide_sequence_info.mutation_sequence, p_length)
-                peptide_mutation_position = peptide_mutation_position_annotation(mutpeps,
-                                                                                 peptide_sequence_info.mutation_position,
-                                                                                 p_length)
-                peptide_info, intermediate_peptide_counters = peptide_selection(normpeps, mutpeps,
-                                                                                peptide_mutation_position,
-                                                                                intermediate_peptide_counters,
-                                                                                peptide_sequence_info, peptide_info,
-                                                                                mutation_info, p_length,
-                                                                                reference_peptides)
-                mutated_peptides_missing_normal = normal_peptide_identification(peptide_info,
-                                                                                mutated_peptides_missing_normal,
-                                                                                mutpeps, mutation_info)
+                peptide_sequence_info_list = peptide_sequence_info if isinstance(peptide_sequence_info, list) else [peptide_sequence_info]
+                for psi in peptide_sequence_info_list:
+                    if fasta_printout is not None:
+                        fasta_printout = long_peptide_fasta_creation(psi, mutation_info, fasta_printout)
+                    normpeps, mutpeps = chopchop(psi.chop_normal_sequence, p_length), chopchop(
+                        psi.mutation_sequence, p_length)
+                    peptide_mutation_position = peptide_mutation_position_annotation(mutpeps,
+                                                                                     psi.mutation_position,
+                                                                                     p_length)
+                    peptide_info, intermediate_peptide_counters = peptide_selection(normpeps, mutpeps,
+                                                                                    peptide_mutation_position,
+                                                                                    intermediate_peptide_counters,
+                                                                                    psi, peptide_info,
+                                                                                    mutation_info, p_length,
+                                                                                    reference_peptides)
+                    mutated_peptides_missing_normal = normal_peptide_identification(peptide_info,
+                                                                                    mutated_peptides_missing_normal,
+                                                                                    mutpeps, mutation_info)
 
             # Accumulate counters
             peptide_count += intermediate_peptide_counters['mutation_peptide_count']
@@ -1583,7 +1586,7 @@ def fusion_peptide_extraction(peptide_lengths, fus_info, fasta_file_name, refere
 
 
 # peptide_extraction
-def mutation_sequence_creation(mutation_info, proteome_reference, genome_reference, peptide_length):
+def mutation_sequence_creation(mutation_info, proteome_reference, genome_reference, peptide_length, superpeptides=False):
     # Create empty named tuple
     PeptideSequenceInfo = namedtuple('peptide_sequence_info',
                                      ['chop_normal_sequence', 'mutation_sequence', 'normal_sequence',
@@ -1592,7 +1595,7 @@ def mutation_sequence_creation(mutation_info, proteome_reference, genome_referen
 
     if mutation_info.mutation_consequence == 'missense_variant':
         peptide_sequence_info = missense_variant_peptide(proteome_reference, mutation_info, peptide_length,
-                                                         PeptideSequenceInfo)
+                                                         PeptideSequenceInfo, superpeptides)
     elif mutation_info.mutation_consequence == 'inframe_insertion':
         peptide_sequence_info = insertion_peptide(proteome_reference, mutation_info, peptide_length,
                                                   PeptideSequenceInfo)
@@ -1608,14 +1611,15 @@ def mutation_sequence_creation(mutation_info, proteome_reference, genome_referen
 
 
 # peptide_extraction > mutation_sequence_creation
-def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, PeptideSequenceInfo):
+def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, PeptideSequenceInfo, superpeptides=False):
     asserted_proteome = reference_assertion(proteome_reference, mutation_info, reference_type='proteome')
     aaseq = asserted_proteome[0]
     index = index_creator(mutation_info.prot_pos, peptide_length, aaseq, cdna_pos_start=None, index_type='amino_acid',
                           codon=None, frame_type=None)
     normal_sequence = aaseq[index.lower_index:index.higher_index]
-    mutation_sequence = normal_sequence[:index.mutation_peptide_position - 1] + mutation_info.aa_mut + normal_sequence[
-                                                                                                       index.mutation_peptide_position:]
+    base_mutation_sequence = normal_sequence[:index.mutation_peptide_position - 1] + mutation_info.aa_mut + normal_sequence[
+                                                                                                            index.mutation_peptide_position:]
+    mutation_sequence = base_mutation_sequence
     consequence = 'M'
     relative_germline_positions = None
     relative_context_sources = None
@@ -1643,9 +1647,17 @@ def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, 
             elif germline_consequence == 'inframe_deletion': #### to do
                 continue
 
-    # Return long peptide (created) and information
-    return PeptideSequenceInfo(normal_sequence, mutation_sequence, normal_sequence, index.mutation_peptide_position,
-                               consequence, relative_germline_positions, relative_context_sources)
+    base_info = PeptideSequenceInfo(normal_sequence, base_mutation_sequence, normal_sequence,
+                                    index.mutation_peptide_position, consequence, None, None)
+    context_info = PeptideSequenceInfo(normal_sequence, mutation_sequence, normal_sequence,
+                                       index.mutation_peptide_position, consequence, relative_germline_positions,
+                                       relative_context_sources)
+    has_non_germline_context = False
+    if relative_context_sources is not None:
+        has_non_germline_context = any([src in ('SOMATIC', 'RNA_EDIT') for _, src in relative_context_sources])
+    if superpeptides and has_non_germline_context and mutation_sequence != base_mutation_sequence:
+        return [base_info, context_info]
+    return context_info if mutation_sequence != base_mutation_sequence else base_info
 
 
 # peptide_extraction > mutation_sequence_creation
@@ -1848,11 +1860,12 @@ def peptide_selection(normpeps, mutpeps, peptide_mutation_position, intermediate
                         context_source_counts['S'] += 1
                     elif context_source == 'RNA_EDIT':
                         context_source_counts['R'] += 1
+        superpeptide = 'Yes' if (context_source_counts.get('S', 0) + context_source_counts.get('R', 0)) > 0 else 'No'
 
 
         # fill dictionary
         peptide_info[mutpep][normpep] = [mutation_info, peptide_sequence_info, mutpos, pep_match_info, has_germline,
-                                         germline_positions, context_source_counts]
+                                         germline_positions, context_source_counts, superpeptide]
 
     return peptide_info, intermediate_peptide_counters
 
@@ -2164,6 +2177,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     has_germline = snv_info_tuple[4]
     germline_positions = snv_info_tuple[5]
     context_source_counts = snv_info_tuple[6] if len(snv_info_tuple) > 6 else {'S': 0, 'G': 0, 'R': 0}
+    superpeptide = snv_info_tuple[7] if len(snv_info_tuple) > 7 else 'No'
     primary_origin = 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC'
     s_count = (1 if primary_origin == 'SOMATIC' else 0) + int(context_source_counts.get('S', 0))
     g_count = int(context_source_counts.get('G', 0))
@@ -2196,6 +2210,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
         'Norm_peptide': Norm_peptide, 'Gene_ID': mutation_info.gene_id,
         'mutation_id_vep': mutation_id_vep, 'Transcript_ID': mutation_info.trans_id,
         'Mutation_Origin': primary_origin,
+        'superpeptide': superpeptide,
         'n_mutations': n_mutations,
         'edit_sig': mutation_info.edit_sig if mutation_info.variant_type == 'RNA_EDIT' else 'NA',
         'Amino_Acid_Change': '{}/{}'.format(mutation_info.aa_normal, mutation_info.aa_mut),
@@ -2267,7 +2282,8 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
     mupexi_core_cols = ['HLA_allele', 'Mut_peptide', 'Norm_peptide', 'Mismatches',
                         'Cancer_Driver_Gene', 'Expression_Level', 'Expression_score',
                         'Chr', 'Gene_ID', 'Gene_Symbol', 'Transcript_ID',
-                        'Mutation_Consequence', 'Mutation_Origin', 'n_mutations', 'edit_sig', 'has_germline', 'Germline_positions']  # mismatches should be in the core
+                        'Mutation_Consequence', 'Mutation_Origin', 'superpeptide', 'n_mutations', 'edit_sig',
+                        'has_germline', 'Germline_positions']  # mismatches should be in the core
 
     net_mhc_EL_cols = ['Mut_MHCrank_EL', 'Mut_MHCscore_EL', 'Mutant_affinity_score']
     net_mhc_BA_cols = ['Mut_MHCrank_BA', 'Mut_MHCscore_BA', 'Mut_MHCaffinity']
