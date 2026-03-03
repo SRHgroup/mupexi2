@@ -2183,6 +2183,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     g_count = int(context_source_counts.get('G', 0))
     r_count = (1 if primary_origin == 'RNA_EDIT' else 0) + int(context_source_counts.get('R', 0))
     n_mutations = 'S={}:G={}:R={}'.format(s_count, g_count, r_count)
+    unique_peptide_id = '{}|{}'.format(mutation_id_vep, peptide_position)
 
     mutation_id_vep = '{}_{}_{}/{}'.format(mutation_info.chr, mutation_info.pos, mutation_info.aa_normal,
                                            mutation_info.aa_mut)
@@ -2210,6 +2211,7 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
         'Norm_peptide': Norm_peptide, 'Gene_ID': mutation_info.gene_id,
         'mutation_id_vep': mutation_id_vep, 'Transcript_ID': mutation_info.trans_id,
         'Mutation_Origin': primary_origin,
+        'unique_peptide_id': unique_peptide_id,
         'superpeptide': superpeptide,
         'n_mutations': n_mutations,
         'edit_sig': mutation_info.edit_sig if mutation_info.variant_type == 'RNA_EDIT' else 'NA',
@@ -2292,6 +2294,7 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
     normal_mhc_BA_cols = ['Norm_MHCrank_BA', 'Norm_MHCscore_BA', 'Norm_MHCaffinity']
 
     snv_cols = ['mutation_id_vep', 'Amino_Acid_Change', 'peptide_position',
+                'unique_peptide_id',
                 'tumor_vaf', 'normal_vaf', 't_depth', 'n_depth', 't_alt_count',
                 'Genomic_Position', 'Protein_position', 'priority_Score']  # priority score should also be in core cols
 
