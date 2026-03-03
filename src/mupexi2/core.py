@@ -1126,7 +1126,10 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
                 continue
 
             if variant_type in ('GERMLINE', 'SOMATIC', 'RNA_EDIT'):
-                variant_info = [consequence, line.strip().split('\t')[9], line.strip().split('\t')[10], variant_type]
+                aa_normal_ctx, aa_mut_ctx = line.strip().split('\t')[10].split('/')
+                ctx_id = '{}_{}_{}/{}'.format(chrom_pos[0], chrom_pos[1], aa_normal_ctx, aa_mut_ctx)
+                variant_info = [consequence, line.strip().split('\t')[9], line.strip().split('\t')[10], variant_type,
+                                ctx_id]
                 context_positions[chrom_pos] = variant_info
 
     with open(vep_file.name) as f:
@@ -1635,11 +1638,12 @@ def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, 
                 germline_position = info[1]
                 AA_change = info[2].split('/')[1]
                 context_source = info[3] if len(info) > 3 else 'GERMLINE'
+                context_mutation_id = info[4] if len(info) > 4 else 'NA'
                 germline_index = int(germline_position) - index.lower_index
                 mutation_sequence = mutation_sequence[:germline_index - 1] + AA_change + mutation_sequence[germline_index:]
                 if context_source == 'GERMLINE':
                     relative_germline_positions.append(germline_index)
-                relative_context_sources.append((germline_index, context_source))
+                relative_context_sources.append((germline_index, context_source, context_mutation_id))
 
             elif germline_consequence == 'inframe_insertion':  #### to do
                 continue
@@ -1654,7 +1658,7 @@ def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, 
                                        relative_context_sources)
     has_non_germline_context = False
     if relative_context_sources is not None:
-        has_non_germline_context = any([src in ('SOMATIC', 'RNA_EDIT') for _, src in relative_context_sources])
+        has_non_germline_context = any([src in ('SOMATIC', 'RNA_EDIT') for _, src, _ in relative_context_sources])
     if superpeptides and has_non_germline_context and mutation_sequence != base_mutation_sequence:
         return [base_info, context_info]
     return context_info if mutation_sequence != base_mutation_sequence else base_info
@@ -1842,6 +1846,8 @@ def peptide_selection(normpeps, mutpeps, peptide_mutation_position, intermediate
         has_germline = 'No'
         germline_positions = []
         context_source_counts = {'S': 0, 'G': 0, 'R': 0}
+        context_type_list = []
+        context_id_list = []
         if peptide_sequence_info.consequence == 'M':
             start_pos = p_length - int(mutpos) + 1
             end_pos = len(peptide_sequence_info.mutation_sequence)-int(mutpos) + 1
@@ -1852,20 +1858,27 @@ def peptide_selection(normpeps, mutpeps, peptide_mutation_position, intermediate
                         has_germline = 'Yes'
                         germline_positions.append(germ_pos - start_pos + 1)
         if peptide_sequence_info.relative_context_sources is not None:
-            for context_pos, context_source in peptide_sequence_info.relative_context_sources:
+            for context_pos, context_source, context_mutation_id in peptide_sequence_info.relative_context_sources:
                 if context_pos >= start_pos and context_pos <= end_pos:
                     if context_source == 'GERMLINE':
                         context_source_counts['G'] += 1
+                        context_type_list.append('G')
                     elif context_source == 'SOMATIC':
                         context_source_counts['S'] += 1
+                        context_type_list.append('S')
                     elif context_source == 'RNA_EDIT':
                         context_source_counts['R'] += 1
+                        context_type_list.append('R')
+                    context_id_list.append(context_mutation_id)
         superpeptide = 'Yes' if (context_source_counts.get('S', 0) + context_source_counts.get('R', 0)) > 0 else 'No'
+        context_mutation_types = ':'.join(context_type_list) if len(context_type_list) > 0 else 'NA'
+        context_mutation_ids = ':'.join(context_id_list) if len(context_id_list) > 0 else 'NA'
 
 
         # fill dictionary
         peptide_info[mutpep][normpep] = [mutation_info, peptide_sequence_info, mutpos, pep_match_info, has_germline,
-                                         germline_positions, context_source_counts, superpeptide]
+                                         germline_positions, context_source_counts, superpeptide,
+                                         context_mutation_types, context_mutation_ids]
 
     return peptide_info, intermediate_peptide_counters
 
@@ -2178,15 +2191,17 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
     germline_positions = snv_info_tuple[5]
     context_source_counts = snv_info_tuple[6] if len(snv_info_tuple) > 6 else {'S': 0, 'G': 0, 'R': 0}
     superpeptide = snv_info_tuple[7] if len(snv_info_tuple) > 7 else 'No'
+    context_mutation_types = snv_info_tuple[8] if len(snv_info_tuple) > 8 else 'NA'
+    context_mutation_ids = snv_info_tuple[9] if len(snv_info_tuple) > 9 else 'NA'
     primary_origin = 'RNA_EDIT' if mutation_info.variant_type == 'RNA_EDIT' else 'SOMATIC'
     s_count = (1 if primary_origin == 'SOMATIC' else 0) + int(context_source_counts.get('S', 0))
     g_count = int(context_source_counts.get('G', 0))
     r_count = (1 if primary_origin == 'RNA_EDIT' else 0) + int(context_source_counts.get('R', 0))
     n_mutations = 'S={}:G={}:R={}'.format(s_count, g_count, r_count)
-    unique_peptide_id = '{}|{}'.format(mutation_id_vep, peptide_position)
 
     mutation_id_vep = '{}_{}_{}/{}'.format(mutation_info.chr, mutation_info.pos, mutation_info.aa_normal,
                                            mutation_info.aa_mut)
+    unique_peptide_id = '{}|{}'.format(mutation_id_vep, peptide_position)
 
     # Extract mismatches
     Mismatches = pep_match_info.mismatch if not pep_match_info is None else 1
@@ -2213,6 +2228,8 @@ def extract_snv_info(snv_info_tuple, mutant_peptide, normal_peptide, proteome_re
         'Mutation_Origin': primary_origin,
         'unique_peptide_id': unique_peptide_id,
         'superpeptide': superpeptide,
+        'context_mutation_types': context_mutation_types,
+        'context_mutation_ids': context_mutation_ids,
         'n_mutations': n_mutations,
         'edit_sig': mutation_info.edit_sig if mutation_info.variant_type == 'RNA_EDIT' else 'NA',
         'Amino_Acid_Change': '{}/{}'.format(mutation_info.aa_normal, mutation_info.aa_mut),
@@ -2284,8 +2301,9 @@ def write_output_file(peptide_info, expression, net_mhc_BA, net_mhc_EL,
     mupexi_core_cols = ['HLA_allele', 'Mut_peptide', 'Norm_peptide', 'Mismatches',
                         'Cancer_Driver_Gene', 'Expression_Level', 'Expression_score',
                         'Chr', 'Gene_ID', 'Gene_Symbol', 'Transcript_ID',
-                        'Mutation_Consequence', 'Mutation_Origin', 'superpeptide', 'n_mutations', 'edit_sig',
-                        'has_germline', 'Germline_positions']  # mismatches should be in the core
+                        'Mutation_Consequence', 'Mutation_Origin', 'superpeptide', 'context_mutation_types',
+                        'context_mutation_ids', 'n_mutations', 'edit_sig', 'has_germline',
+                        'Germline_positions']  # mismatches should be in the core
 
     net_mhc_EL_cols = ['Mut_MHCrank_EL', 'Mut_MHCscore_EL', 'Mutant_affinity_score']
     net_mhc_BA_cols = ['Mut_MHCrank_BA', 'Mut_MHCscore_BA', 'Mut_MHCaffinity']
