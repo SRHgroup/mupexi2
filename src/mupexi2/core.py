@@ -12,6 +12,7 @@ Information from each mutation is annotated together with the mutant and normal 
 from __future__ import absolute_import
 from __future__ import print_function
 from collections import defaultdict, namedtuple
+from dataclasses import dataclass
 from datetime import datetime
 from six.moves import map
 from six.moves import range
@@ -26,6 +27,70 @@ import gzip
 import six
 from six.moves import zip
 import warnings
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    vcf_file: str
+    fusion_file: str
+    peptide_length: str
+    output: str
+    logfile: str
+    HLA_alleles: str
+    config: str
+    expression_file: str
+    fasta_file_name: str
+    webserver: str
+    outdir: str
+    keep_temp: str
+    prefix: str
+    print_mismatch: str
+    liftover: str
+    expression_type: str
+    num_mismatches: str
+    assembly: str
+    fork: str
+    species: str
+    netmhc_anal: str
+    vcf_type: str
+    germlines: bool
+    rna_edit: bool
+    tumor_sample: str
+    normal_sample: str
+    rnaedit_known_only: bool
+    rnaedit_known_key: str
+    phasing_mode: str
+    superpeptides: bool
+
+
+@dataclass(frozen=True)
+class ContextMutation:
+    consequence: str
+    protein_pos: str
+    aa_change: str
+    source: str
+    mutation_id: str
+
+
+@dataclass(frozen=True)
+class VariantRecord:
+    gene_id: str
+    trans_id: str
+    mutation_consequence: str
+    chr: str
+    pos: str
+    cdna_pos: str
+    prot_pos: int
+    prot_pos_to: str
+    aa_normal: str
+    aa_mut: str
+    codon_normal: str
+    codon_mut: str
+    alt_allele: str
+    symbol: str
+    variant_type: str
+    edit_sig: str
+    nearby_germlines: dict
 
 
 def main(args):
@@ -1067,11 +1132,6 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
     print_ifnot_webserver('\tCreating mutation information dictionary', webserver)
     vep_info = []  # empty list
     previous_mutation_id = previous_mutation_id_vep = ''  # empty string
-    # Creating named tuple
-    Mutation_Info = namedtuple('mutation_info',
-                               ['gene_id', 'trans_id', 'mutation_consequence', 'chr', 'pos', 'cdna_pos', 'prot_pos',
-                                'prot_pos_to', 'aa_normal', 'aa_mut', 'codon_normal', 'codon_mut', 'alt_allele',
-                                'symbol', 'variant_type', 'edit_sig', 'nearby_germlines'])
     transcript_info = defaultdict(dict)
     protein_positions = defaultdict(lambda: defaultdict(dict))
     if phasing_stats is None:
@@ -1128,8 +1188,13 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             if variant_type in ('GERMLINE', 'SOMATIC', 'RNA_EDIT'):
                 aa_normal_ctx, aa_mut_ctx = line.strip().split('\t')[10].split('/')
                 ctx_id = '{}_{}_{}/{}'.format(chrom_pos[0], chrom_pos[1], aa_normal_ctx, aa_mut_ctx)
-                variant_info = [consequence, line.strip().split('\t')[9], line.strip().split('\t')[10], variant_type,
-                                ctx_id]
+                variant_info = ContextMutation(
+                    consequence=consequence,
+                    protein_pos=line.strip().split('\t')[9],
+                    aa_change=line.strip().split('\t')[10],
+                    source=variant_type,
+                    mutation_id=ctx_id
+                )
                 context_positions[chrom_pos] = variant_info
 
     with open(vep_file.name) as f:
@@ -1186,9 +1251,25 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             protein_positions[mutation_id_vep][geneID][transID] = prot_pos
             # append information from the line to the list of named tuples - fill tuple
             vep_info.append(
-                Mutation_Info(geneID, transID, mutation_consequence, chr_, genome_pos, cdna_pos, int(prot_pos),
-                              prot_pos_to, aa_normal, aa_mutation, codon_normal, codon_mut, alt_allele, symbol,
-                              variant_type, edit_sig, nearby_germlines))
+                VariantRecord(
+                    gene_id=geneID,
+                    trans_id=transID,
+                    mutation_consequence=mutation_consequence,
+                    chr=chr_,
+                    pos=genome_pos,
+                    cdna_pos=cdna_pos,
+                    prot_pos=int(prot_pos),
+                    prot_pos_to=prot_pos_to,
+                    aa_normal=aa_normal,
+                    aa_mut=aa_mutation,
+                    codon_normal=codon_normal,
+                    codon_mut=codon_mut,
+                    alt_allele=alt_allele,
+                    symbol=symbol,
+                    variant_type=variant_type,
+                    edit_sig=edit_sig,
+                    nearby_germlines=nearby_germlines
+                ))
 
             # count independent mutation mutation consequences
             if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'missense_variant':
@@ -1272,7 +1353,7 @@ def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary
         return None
 
     for (g_chrom, g_pos), info in germline_positions.items():
-        source_set = info[3] if len(info) > 3 else 'GERMLINE'
+        source_set = info.source
         if (not include_all_sources) and source_set != 'GERMLINE':
             continue
         if g_chrom == chrom and str(g_pos) == str(pos):
@@ -1632,13 +1713,13 @@ def missense_variant_peptide(proteome_reference, mutation_info, peptide_length, 
         relative_context_sources = []
         somatic_pos = int(mutation_info.prot_pos)
         for chrom_pos, info in mutation_info.nearby_germlines.items():
-            germline_consequence = info[0]
-            germline_dist_to_somatic = abs(somatic_pos - int(info[1]))
+            germline_consequence = info.consequence
+            germline_dist_to_somatic = abs(somatic_pos - int(info.protein_pos))
             if germline_consequence == 'missense_variant' and germline_dist_to_somatic < peptide_length:
-                germline_position = info[1]
-                AA_change = info[2].split('/')[1]
-                context_source = info[3] if len(info) > 3 else 'GERMLINE'
-                context_mutation_id = info[4] if len(info) > 4 else 'NA'
+                germline_position = info.protein_pos
+                AA_change = info.aa_change.split('/')[1]
+                context_source = info.source
+                context_mutation_id = info.mutation_id
                 germline_index = int(germline_position) - index.lower_index
                 mutation_sequence = mutation_sequence[:germline_index - 1] + AA_change + mutation_sequence[germline_index:]
                 if context_source == 'GERMLINE':
@@ -3010,19 +3091,38 @@ def read_options(argv):
         sys.exit('ERROR: --phasing-mode must be one of: auto, strict')
     superpeptides = parse_bool_opt(opts.get('--superpeptides', 'false'), '--superpeptides')
 
-    # Create and fill input named-tuple
-    Input = namedtuple('input',
-                       ['vcf_file', 'fusion_file', 'peptide_length', 'output', 'logfile', 'HLA_alleles', 'config',
-                        'expression_file',
-                        'fasta_file_name', 'webserver', 'outdir', 'keep_temp', 'prefix', 'print_mismatch', 'liftover',
-                        'expression_type', 'num_mismatches', 'assembly', 'fork', 'species', 'netmhc_anal',
-                        'vcf_type', 'germlines', 'rna_edit', 'tumor_sample', 'normal_sample',
-                        'rnaedit_known_only', 'rnaedit_known_key', 'phasing_mode', 'superpeptides'])
-    inputinfo = Input(vcf_file, fusion_file, peptide_length, output, logfile, HLA_alleles, config, expression_file,
-                      fasta_file_name,
-                      webserver, outdir, keep_temp, prefix, print_mismatch, liftover, expression_type, num_mismatches,
-                      assembly, fork, species, netmhc_anal, vcf_type, germlines, rna_edit, tumor_sample, normal_sample,
-                      rnaedit_known_only, rnaedit_known_key, phasing_mode, superpeptides)
+    inputinfo = RunConfig(
+        vcf_file=vcf_file,
+        fusion_file=fusion_file,
+        peptide_length=peptide_length,
+        output=output,
+        logfile=logfile,
+        HLA_alleles=HLA_alleles,
+        config=config,
+        expression_file=expression_file,
+        fasta_file_name=fasta_file_name,
+        webserver=webserver,
+        outdir=outdir,
+        keep_temp=keep_temp,
+        prefix=prefix,
+        print_mismatch=print_mismatch,
+        liftover=liftover,
+        expression_type=expression_type,
+        num_mismatches=num_mismatches,
+        assembly=assembly,
+        fork=fork,
+        species=species,
+        netmhc_anal=netmhc_anal,
+        vcf_type=vcf_type,
+        germlines=germlines,
+        rna_edit=rna_edit,
+        tumor_sample=tumor_sample,
+        normal_sample=normal_sample,
+        rnaedit_known_only=rnaedit_known_only,
+        rnaedit_known_key=rnaedit_known_key,
+        phasing_mode=phasing_mode,
+        superpeptides=superpeptides
+    )
 
     return inputinfo
 
