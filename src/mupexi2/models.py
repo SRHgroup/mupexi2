@@ -34,6 +34,12 @@ class RunConfig:
     phasing_mode: str
     superpeptides: bool
     parallel_k: bool
+    context_rna_min_depth: int
+    context_rna_min_alt_count: int
+    context_rna_min_vaf: float
+    context_somatic_min_depth: int
+    context_somatic_min_alt_count: int
+    context_somatic_min_vaf: float
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,9 @@ class ContextMutation:
     aa_change: str
     source: str
     mutation_id: str
+    t_depth: object
+    t_alt_count: object
+    tumor_vaf: object
 
 
 @dataclass(frozen=True)

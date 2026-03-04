@@ -22,6 +22,7 @@ from six.moves.configparser import ConfigParser
 from tempfile import NamedTemporaryFile
 import psutil
 import sys, re, getopt, itertools, warnings, string, subprocess, os, os.path, math, tempfile, shutil, numpy, pandas
+import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import six
 from six.moves import zip
@@ -90,9 +91,22 @@ def main(args):
                                 input_.normal_sample)
         vep_file = run_vep(vcf_sorted_file, input_.webserver, tmp_dir, paths.vep_path, paths.vep_dir, input_.keep_temp,
                            input_.prefix, input_.outdir, input_.assembly, input_.fork, species)
+        context_qc_thresholds = {
+            'RNA_EDIT': {
+                'min_depth': input_.context_rna_min_depth,
+                'min_alt_count': input_.context_rna_min_alt_count,
+                'min_vaf': input_.context_rna_min_vaf
+            },
+            'SOMATIC': {
+                'min_depth': input_.context_somatic_min_depth,
+                'min_alt_count': input_.context_somatic_min_alt_count,
+                'min_vaf': input_.context_somatic_min_vaf
+            }
+        }
+
         vep_info, vep_counters, transcript_info, protein_positions = build_vep_info(
             vep_file, input_.webserver, vcf_sorted_file, peptide_length, input_.tumor_sample, input_.normal_sample,
-            phasing_stats, input_.superpeptides)
+            phasing_stats, input_.superpeptides, context_qc_thresholds)
 
         end_time_vep = datetime.now()
 
@@ -217,6 +231,17 @@ def main(args):
     move_output_files(outdir=input_.outdir, log_file=log_file, logfile_name=input_.logfile,
                       fasta_file=fasta_file, fasta_file_name=input_.fasta_file_name, output_files=output_files,
                       webserver=input_.webserver, www_tmp_dir=www_tmp_dir)
+
+    write_run_report(
+        input_=input_,
+        version=version,
+        start_time=start_time,
+        end_time=end_time_mupex,
+        phasing_stats=locals().get('phasing_stats', {}),
+        vep_counters=locals().get('vep_counters', None),
+        peptide_counters=locals().get('peptide_counters', None),
+        fus_counter=locals().get('fus_counter', None)
+    )
 
     # clean up
     clean_up(tmp_dir)
@@ -987,7 +1012,7 @@ def run_vep(vcf_sorted_file, webserver, tmp_dir, vep_path, vep_dir, keep_tmp, fi
 
 
 def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumor_sample=None, normal_sample=None,
-                   phasing_stats=None, superpeptides=False):
+                   phasing_stats=None, superpeptides=False, context_qc_thresholds=None):
     print_ifnot_webserver('\tCreating mutation information dictionary', webserver)
     vep_info = []  # empty list
     previous_mutation_id = previous_mutation_id_vep = ''  # empty string
@@ -997,9 +1022,16 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
         phasing_stats = {}
     phasing_stats.setdefault('skipped_unphased_het_germline_context', 0)
     phasing_stats.setdefault('applied_context_records', 0)
+    phasing_stats.setdefault('skipped_context_qc_records', 0)
 
     non_used_mutation_count, misssense_variant_count, inframe_insertion_count, \
     inframe_deletion_count, frameshift_variant_count = 0, 0, 0, 0, 0
+
+    if context_qc_thresholds is None:
+        context_qc_thresholds = {
+            'RNA_EDIT': {'min_depth': 0, 'min_alt_count': 0, 'min_vaf': 0.0},
+            'SOMATIC': {'min_depth': 0, 'min_alt_count': 0, 'min_vaf': 0.0}
+        }
 
     with open(vep_file.name) as f, open(vep_compatible_vcf.name) as vcf:
 
@@ -1023,11 +1055,31 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             variant_types[chrom_pos] = source_set
             info_dict = parse_info_field(columns[7])
             variant_edit_sig[chrom_pos] = info_dict.get('EDIT_SIG', 'NA') if source_set == 'RNA_EDIT' else 'NA'
+            tumor_vaf = 'NA'
+            t_depth = 'NA'
+            t_alt_count = 'NA'
             if format_idx is not None and tumor_idx is not None:
                 format_keys = columns[format_idx].split(':')
                 sample_values = columns[tumor_idx].split(':') if len(columns) > tumor_idx else []
                 sample_map = dict(zip(format_keys, sample_values))
                 variant_phase[chrom_pos] = parse_genotype_state(sample_map.get('GT', ''), sample_map.get('PS', ''))
+                tumor_ad = sample_map.get('AD', '')
+                if tumor_ad not in ('', '.', './.'):
+                    ad_parts = tumor_ad.split(',')
+                    if len(ad_parts) >= 2:
+                        try:
+                            ref_count = int(ad_parts[0])
+                            alt_count = int(ad_parts[1])
+                            t_alt_count = alt_count
+                            t_depth = ref_count + alt_count
+                        except ValueError:
+                            pass
+                if 'AF' in sample_map and sample_map['AF'] not in ('', '.', './.'):
+                    tumor_vaf = sample_map['AF']
+                elif 'FA' in sample_map and sample_map['FA'] not in ('', '.', './.'):
+                    tumor_vaf = sample_map['FA']
+                elif t_depth not in ('NA', 0) and t_depth != 0 and t_alt_count != 'NA':
+                    tumor_vaf = '{:.6g}'.format(float(t_alt_count) / float(t_depth))
 
         for line in f.readlines():
             if line.startswith('#'):
@@ -1052,7 +1104,10 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
                     protein_pos=line.strip().split('\t')[9],
                     aa_change=line.strip().split('\t')[10],
                     source=variant_type,
-                    mutation_id=ctx_id
+                    mutation_id=ctx_id,
+                    t_depth=t_depth,
+                    t_alt_count=t_alt_count,
+                    tumor_vaf=tumor_vaf
                 )
                 context_positions[chrom_pos] = variant_info
 
@@ -1099,7 +1154,8 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             if variant_type in ('SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
                 nearby_germlines = get_nearby_germlines(chr_, genome_pos, context_positions, peptide_length,
                                                         primary_phase_state, variant_phase, phasing_stats,
-                                                        include_all_sources=superpeptides)
+                                                        include_all_sources=superpeptides,
+                                                        context_qc_thresholds=context_qc_thresholds)
             else:
                 nearby_germlines = None
             mutation_id_vep = '{}_{}_{}/{}'.format(chr_, genome_pos, aa_normal, aa_mutation)
@@ -1162,8 +1218,9 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
     vep_counters = VEPCounters(non_used_mutation_count, misssense_variant_count, gene_count, transcript_Count,
                                inframe_insertion_count, inframe_deletion_count, frameshift_variant_count)
 
-    print_ifnot_webserver('\tContext stats: skipped_unphased_het_germline_context={} applied_context_records={}'.format(
+    print_ifnot_webserver('\tContext stats: skipped_unphased_het_germline_context={} skipped_context_qc_records={} applied_context_records={}'.format(
         phasing_stats.get('skipped_unphased_het_germline_context', 0),
+        phasing_stats.get('skipped_context_qc_records', 0),
         phasing_stats.get('applied_context_records', 0)), webserver)
 
     return vep_info, vep_counters, transcript_info, protein_positions
@@ -1171,7 +1228,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
 #### function to get germlines surrounding a somatic with a given peptide length. returns a dict with position:AAchange
 
 def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary_phase_state=None, variant_phase=None,
-                         phasing_stats=None, include_all_sources=False):
+                         phasing_stats=None, include_all_sources=False, context_qc_thresholds=None):
     def parse_interval(pos_str):
         if pos_str is None:
             return None
@@ -1205,8 +1262,10 @@ def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary
     max_distance = peptide_length[-1] * 3
     variant_phase = variant_phase if variant_phase is not None else {}
     phasing_stats = phasing_stats if phasing_stats is not None else {}
+    context_qc_thresholds = context_qc_thresholds if context_qc_thresholds is not None else {}
     phasing_stats.setdefault('skipped_unphased_het_germline_context', 0)
     phasing_stats.setdefault('applied_context_records', 0)
+    phasing_stats.setdefault('skipped_context_qc_records', 0)
     pos_interval = parse_interval(pos)
     if pos_interval is None:
         return None
@@ -1226,6 +1285,32 @@ def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary
             is_near = True
         if not is_near:
             continue
+
+        if source_set in ('SOMATIC', 'RNA_EDIT'):
+            thresholds = context_qc_thresholds.get(source_set, {})
+
+            def to_float(value):
+                if value in (None, 'NA', '.', './.', ''):
+                    return None
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            t_depth = to_float(info.t_depth)
+            t_alt_count = to_float(info.t_alt_count)
+            tumor_vaf = to_float(info.tumor_vaf)
+            min_depth = float(thresholds.get('min_depth', 0))
+            min_alt_count = float(thresholds.get('min_alt_count', 0))
+            min_vaf = float(thresholds.get('min_vaf', 0.0))
+            fails_qc = (
+                (min_depth > 0 and (t_depth is None or t_depth < min_depth)) or
+                (min_alt_count > 0 and (t_alt_count is None or t_alt_count < min_alt_count)) or
+                (min_vaf > 0 and (tumor_vaf is None or tumor_vaf < min_vaf))
+            )
+            if fails_qc:
+                phasing_stats['skipped_context_qc_records'] += 1
+                continue
 
         can_apply = should_apply_context_variant(primary_phase_state, candidate_phase_state)
         if can_apply:
@@ -2737,6 +2822,66 @@ def move_output_files(outdir, log_file, logfile_name, fasta_file, fasta_file_nam
         os.system('chmod -R a+rwx {}'.format(www_tmp_dir))
 
 
+def write_run_report(input_, version, start_time, end_time, phasing_stats=None, vep_counters=None,
+                     peptide_counters=None, fus_counter=None):
+    report_path = os.path.join(input_.outdir, '{}_run_report.json'.format(input_.prefix))
+
+    vep_payload = None
+    if vep_counters is not None:
+        try:
+            vep_payload = vep_counters._asdict()
+        except Exception:
+            vep_payload = str(vep_counters)
+
+    peptide_payload = None
+    if peptide_counters is not None:
+        try:
+            peptide_payload = peptide_counters._asdict()
+        except Exception:
+            peptide_payload = str(peptide_counters)
+
+    report = {
+        'tool': 'mupexi2',
+        'version': version,
+        'started_at': start_time.isoformat(),
+        'ended_at': end_time.isoformat(),
+        'duration_seconds': (end_time - start_time).total_seconds(),
+        'command': ' '.join(sys.argv),
+        'environment': {
+            'python': sys.version.split()[0],
+            'platform': sys.platform,
+            'pandas': getattr(pandas, '__version__', 'unknown'),
+            'numpy': getattr(numpy, '__version__', 'unknown')
+        },
+        'run_config': {
+            'vcf_type': input_.vcf_type,
+            'germlines': input_.germlines,
+            'rna_edit': input_.rna_edit,
+            'superpeptides': input_.superpeptides,
+            'parallel_k': input_.parallel_k,
+            'peptide_length': input_.peptide_length,
+            'tumor_sample': input_.tumor_sample,
+            'normal_sample': input_.normal_sample,
+            'rnaedit_known_only': input_.rnaedit_known_only,
+            'rnaedit_known_key': input_.rnaedit_known_key,
+            'phasing_mode': input_.phasing_mode,
+            'context_rna_min_depth': input_.context_rna_min_depth,
+            'context_rna_min_alt_count': input_.context_rna_min_alt_count,
+            'context_rna_min_vaf': input_.context_rna_min_vaf,
+            'context_somatic_min_depth': input_.context_somatic_min_depth,
+            'context_somatic_min_alt_count': input_.context_somatic_min_alt_count,
+            'context_somatic_min_vaf': input_.context_somatic_min_vaf
+        },
+        'phasing_stats': phasing_stats if phasing_stats is not None else {},
+        'vep_counters': vep_payload,
+        'peptide_counters': peptide_payload,
+        'fusion_counters': fus_counter if fus_counter is not None else {}
+    }
+
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2, sort_keys=True)
+
+
 def keep_temp_file(keep_temp, file_extension, file_name, file_prefix, move_to_dir, peptide_lengths, filetype):
     if keep_temp is not None:
         if peptide_lengths is None:
@@ -2842,6 +2987,16 @@ def usage():
                                 (true/false)
         --parallel-k            Run each peptide length (k) in parallel             false
         --parallel_k            Alias for --parallel-k
+        --context-rna-min-depth Minimum tumor depth for RNA_EDIT context            0
+        --context-rna-min-alt-count
+                                Minimum tumor alt count for RNA_EDIT context         0
+        --context-rna-min-vaf   Minimum tumor VAF for RNA_EDIT context              0
+        --context-somatic-min-depth
+                                Minimum tumor depth for SOMATIC context              0
+        --context-somatic-min-alt-count
+                                Minimum tumor alt count for SOMATIC context          0
+        --context-somatic-min-vaf
+                                Minimum tumor VAF for SOMATIC context                0
         Other options (these do not take values)
         -f, --make-fasta        Create FASTA file with long peptides 
                                 - mutation in the middle
@@ -2873,6 +3028,24 @@ def read_options(argv):
             return False
         sys.exit('ERROR: {} must be true/false'.format(name))
 
+    def parse_nonnegative_int(value, name):
+        try:
+            parsed = int(value)
+        except ValueError:
+            sys.exit('ERROR: {} must be an integer'.format(name))
+        if parsed < 0:
+            sys.exit('ERROR: {} must be >= 0'.format(name))
+        return parsed
+
+    def parse_nonnegative_float(value, name):
+        try:
+            parsed = float(value)
+        except ValueError:
+            sys.exit('ERROR: {} must be a number'.format(name))
+        if parsed < 0:
+            sys.exit('ERROR: {} must be >= 0'.format(name))
+        return parsed
+
     try:
         optlist, args = getopt.getopt(argv,
                                       'v:z:a:l:o:d:L:e:c:p:E:m:A:F:s:nftMwgh',
@@ -2884,7 +3057,10 @@ def read_options(argv):
                                        'vcf-type=', 'vcf_type=', 'germlines=', 'rna-edit=', 'rna_edit=',
                                        'tumor-sample=', 'normal-sample=', 'rnaedit-known-only',
                                        'rnaedit-allow-novel', 'rnaedit-known-key=', 'phasing-mode=',
-                                       'superpeptides=', 'parallel-k=', 'parallel_k='])
+                                       'superpeptides=', 'parallel-k=', 'parallel_k=',
+                                       'context-rna-min-depth=', 'context-rna-min-alt-count=',
+                                       'context-rna-min-vaf=', 'context-somatic-min-depth=',
+                                       'context-somatic-min-alt-count=', 'context-somatic-min-vaf='])
         if not optlist:
             print('No options supplied')
             usage()
@@ -2989,6 +3165,16 @@ def read_options(argv):
         sys.exit('ERROR: --phasing-mode must be one of: auto, strict')
     superpeptides = parse_bool_opt(opts.get('--superpeptides', 'false'), '--superpeptides')
     parallel_k = parse_bool_opt(opts.get('--parallel-k', opts.get('--parallel_k', 'false')), '--parallel-k')
+    context_rna_min_depth = parse_nonnegative_int(opts.get('--context-rna-min-depth', '0'), '--context-rna-min-depth')
+    context_rna_min_alt_count = parse_nonnegative_int(opts.get('--context-rna-min-alt-count', '0'),
+                                                      '--context-rna-min-alt-count')
+    context_rna_min_vaf = parse_nonnegative_float(opts.get('--context-rna-min-vaf', '0'), '--context-rna-min-vaf')
+    context_somatic_min_depth = parse_nonnegative_int(opts.get('--context-somatic-min-depth', '0'),
+                                                      '--context-somatic-min-depth')
+    context_somatic_min_alt_count = parse_nonnegative_int(opts.get('--context-somatic-min-alt-count', '0'),
+                                                          '--context-somatic-min-alt-count')
+    context_somatic_min_vaf = parse_nonnegative_float(opts.get('--context-somatic-min-vaf', '0'),
+                                                      '--context-somatic-min-vaf')
 
     inputinfo = RunConfig(
         vcf_file=vcf_file,
@@ -3021,7 +3207,13 @@ def read_options(argv):
         rnaedit_known_key=rnaedit_known_key,
         phasing_mode=phasing_mode,
         superpeptides=superpeptides,
-        parallel_k=parallel_k
+        parallel_k=parallel_k,
+        context_rna_min_depth=context_rna_min_depth,
+        context_rna_min_alt_count=context_rna_min_alt_count,
+        context_rna_min_vaf=context_rna_min_vaf,
+        context_somatic_min_depth=context_somatic_min_depth,
+        context_somatic_min_alt_count=context_somatic_min_alt_count,
+        context_somatic_min_vaf=context_somatic_min_vaf
     )
 
     return inputinfo
