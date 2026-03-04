@@ -64,3 +64,21 @@ class VariantRecord:
     variant_type: str
     edit_sig: str
     nearby_germlines: dict
+
+
+@dataclass(frozen=True)
+class PeptideSequenceInfo:
+    chop_normal_sequence: str
+    mutation_sequence: str
+    normal_sequence: str
+    mutation_position: object
+    consequence: str
+    relative_germline_positions: object
+    relative_context_sources: object
+
+
+@dataclass(frozen=True)
+class PepMatchInfo:
+    normal_peptide: str
+    mismatch: int
+    mismatch_peptide: str
