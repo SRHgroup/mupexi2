@@ -1473,6 +1473,10 @@ def peptide_extraction(peptide_lengths, vep_info, proteome_reference, genome_ref
     peptide_info = defaultdict(dict)  # empty dictionary
     fasta_printout = defaultdict(dict) if not fasta_file_name is None else None
     pepmatch_file_names = defaultdict(dict)  # empty dictionary
+    reference_peptide_file_paths = {}
+    for k, v in reference_peptide_file_names.items():
+        reference_peptide_file_paths[k] = v if isinstance(v, str) else v.name
+
     if parallel_k and len(peptide_lengths) > 1:
         max_workers = min(len(peptide_lengths), os.cpu_count() or len(peptide_lengths))
         futures = []
@@ -1480,14 +1484,14 @@ def peptide_extraction(peptide_lengths, vep_info, proteome_reference, genome_ref
             for p_length in peptide_lengths:
                 futures.append(executor.submit(
                     _run_single_k_task, p_length, vep_info, proteome_reference, genome_reference,
-                    reference_peptides, reference_peptide_file_names, fasta_file_name, peptide_match, tmp_dir,
+                    reference_peptides, reference_peptide_file_paths, fasta_file_name, peptide_match, tmp_dir,
                     webserver, print_mismatch, num_mismatches, superpeptides))
             single_results = [f.result() for f in as_completed(futures)]
         single_results = sorted(single_results, key=lambda x: x['p_length'])
     else:
         single_results = [_run_single_k_task(
             p_length, vep_info, proteome_reference, genome_reference, reference_peptides,
-            reference_peptide_file_names, fasta_file_name, peptide_match, tmp_dir, webserver, print_mismatch,
+            reference_peptide_file_paths, fasta_file_name, peptide_match, tmp_dir, webserver, print_mismatch,
             num_mismatches, superpeptides) for p_length in peptide_lengths]
 
     for res in single_results:
