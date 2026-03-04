@@ -22,6 +22,7 @@ from six.moves.configparser import ConfigParser
 from tempfile import NamedTemporaryFile
 import psutil
 import sys, re, getopt, itertools, warnings, string, subprocess, os, os.path, math, tempfile, shutil, numpy, pandas
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import six
 from six.moves import zip
 import warnings
@@ -109,7 +110,7 @@ def main(args):
                                                  input_.fasta_file_name,
                                                  paths.peptide_match, tmp_dir, input_.webserver, input_.print_mismatch,
                                                  input_.keep_temp, input_.prefix, input_.outdir, input_.num_mismatches,
-                                                 input_.superpeptides)
+                                                 input_.superpeptides, input_.parallel_k)
 
         """
         MuPeI: Mutant peptide Informer 
@@ -1412,52 +1413,81 @@ def chopchop(aaSeq, peptide_length, mut_type='SNV', reading_frame='in-frame'):
 
 def peptide_extraction(peptide_lengths, vep_info, proteome_reference, genome_reference, reference_peptides,
                        reference_peptide_file_names, fasta_file_name, peptide_match, tmp_dir, webserver, print_mismatch,
-                       keep_tmp, file_prefix, outdir, num_mismatches, superpeptides=False):
-    print_ifnot_webserver('\tPeptide extraction begun', webserver)
-    peptide_count, normal_match_count, removal_count = 0, 0, 0
-    peptide_info = defaultdict(dict)  # empty dictionary
-    fasta_printout = defaultdict(dict) if not fasta_file_name is None else None
-    pepmatch_file_names = defaultdict(dict)  # empty dictionary
-
-    for p_length in peptide_lengths:
+                       keep_tmp, file_prefix, outdir, num_mismatches, superpeptides=False, parallel_k=False):
+    def _run_single_k(p_length):
+        p_peptide_count, p_normal_match_count, p_removal_count = 0, 0, 0
+        p_peptide_info = defaultdict(dict)
+        p_fasta_printout = defaultdict(dict) if not fasta_file_name is None else None
+        p_pepmatch_file_names = defaultdict(dict)
         mutated_peptides_missing_normal = set()
+        last_mutation_info = None
+
         for mutation_info in vep_info:
-            # create mutation counters
+            last_mutation_info = mutation_info
             intermediate_peptide_counters = {'mutation_peptide_count': 0, 'mutation_normal_match_count': 0,
                                              'peptide_removal_count': 0}
-            # extract sequence
             peptide_sequence_info = mutation_sequence_creation(mutation_info, proteome_reference, genome_reference,
                                                                p_length, superpeptides)
             if peptide_sequence_info is not None:
                 peptide_sequence_info_list = peptide_sequence_info if isinstance(peptide_sequence_info, list) else [peptide_sequence_info]
                 for psi in peptide_sequence_info_list:
-                    if fasta_printout is not None:
-                        fasta_printout = long_peptide_fasta_creation(psi, mutation_info, fasta_printout)
-                    normpeps, mutpeps = chopchop(psi.chop_normal_sequence, p_length), chopchop(
-                        psi.mutation_sequence, p_length)
-                    peptide_mutation_position = peptide_mutation_position_annotation(mutpeps,
-                                                                                     psi.mutation_position,
-                                                                                     p_length)
-                    peptide_info, intermediate_peptide_counters = peptide_selection(normpeps, mutpeps,
-                                                                                    peptide_mutation_position,
-                                                                                    intermediate_peptide_counters,
-                                                                                    psi, peptide_info,
-                                                                                    mutation_info, p_length,
-                                                                                    reference_peptides)
-                    mutated_peptides_missing_normal = normal_peptide_identification(peptide_info,
-                                                                                    mutated_peptides_missing_normal,
-                                                                                    mutpeps, mutation_info)
+                    if p_fasta_printout is not None:
+                        p_fasta_printout = long_peptide_fasta_creation(psi, mutation_info, p_fasta_printout)
+                    normpeps = chopchop(psi.chop_normal_sequence, p_length)
+                    mutpeps = chopchop(psi.mutation_sequence, p_length)
+                    peptide_mutation_position = peptide_mutation_position_annotation(
+                        mutpeps, psi.mutation_position, p_length)
+                    p_peptide_info, intermediate_peptide_counters = peptide_selection(
+                        normpeps, mutpeps, peptide_mutation_position, intermediate_peptide_counters,
+                        psi, p_peptide_info, mutation_info, p_length, reference_peptides)
+                    mutated_peptides_missing_normal = normal_peptide_identification(
+                        p_peptide_info, mutated_peptides_missing_normal, mutpeps, mutation_info)
 
-            # Accumulate counters
-            peptide_count += intermediate_peptide_counters['mutation_peptide_count']
-            normal_match_count += intermediate_peptide_counters['mutation_normal_match_count']
-            removal_count += intermediate_peptide_counters['peptide_removal_count']
+            p_peptide_count += intermediate_peptide_counters['mutation_peptide_count']
+            p_normal_match_count += intermediate_peptide_counters['mutation_normal_match_count']
+            p_removal_count += intermediate_peptide_counters['peptide_removal_count']
 
-        peptide_info, pepmatch_file_names = normal_peptide_correction(mutated_peptides_missing_normal, mutation_info,
-                                                                      p_length, reference_peptide_file_names,
-                                                                      peptide_info, peptide_match, tmp_dir,
-                                                                      pepmatch_file_names, webserver, print_mismatch,
-                                                                      num_mismatches)
+        if last_mutation_info is not None:
+            p_peptide_info, p_pepmatch_file_names = normal_peptide_correction(
+                mutated_peptides_missing_normal, last_mutation_info, p_length, reference_peptide_file_names,
+                p_peptide_info, peptide_match, tmp_dir, p_pepmatch_file_names, webserver, print_mismatch,
+                num_mismatches)
+
+        return {
+            'p_length': p_length,
+            'peptide_info': p_peptide_info,
+            'peptide_count': p_peptide_count,
+            'normal_match_count': p_normal_match_count,
+            'removal_count': p_removal_count,
+            'fasta_printout': p_fasta_printout,
+            'pepmatch_file_name': p_pepmatch_file_names.get(p_length, None),
+        }
+
+    print_ifnot_webserver('\tPeptide extraction begun', webserver)
+    peptide_count, normal_match_count, removal_count = 0, 0, 0
+    peptide_info = defaultdict(dict)  # empty dictionary
+    fasta_printout = defaultdict(dict) if not fasta_file_name is None else None
+    pepmatch_file_names = defaultdict(dict)  # empty dictionary
+    if parallel_k and len(peptide_lengths) > 1:
+        max_workers = min(len(peptide_lengths), os.cpu_count() or len(peptide_lengths))
+        futures = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for p_length in peptide_lengths:
+                futures.append(executor.submit(_run_single_k, p_length))
+            single_results = [f.result() for f in as_completed(futures)]
+        single_results = sorted(single_results, key=lambda x: x['p_length'])
+    else:
+        single_results = [_run_single_k(p_length) for p_length in peptide_lengths]
+
+    for res in single_results:
+        for mutpep, norm_map in res['peptide_info'].items():
+            peptide_info[mutpep].update(norm_map)
+        peptide_count += res['peptide_count']
+        normal_match_count += res['normal_match_count']
+        removal_count += res['removal_count']
+        if fasta_printout is not None and res['fasta_printout'] is not None:
+            fasta_printout.update(res['fasta_printout'])
+        pepmatch_file_names[res['p_length']] = res['pepmatch_file_name']
 
     # Create and fill counter named-tuple
     PeptideCounters = namedtuple('peptide_counters', ['peptide_count', 'normal_match_count', 'removal_count'])
@@ -2802,6 +2832,8 @@ def usage():
                                 (auto/strict)
         --superpeptides         Include phased/hom-alt nearby S/R variants as context false
                                 (true/false)
+        --parallel-k            Run each peptide length (k) in parallel             false
+        --parallel_k            Alias for --parallel-k
         Other options (these do not take values)
         -f, --make-fasta        Create FASTA file with long peptides 
                                 - mutation in the middle
@@ -2844,7 +2876,7 @@ def read_options(argv):
                                        'vcf-type=', 'vcf_type=', 'germlines=', 'rna-edit=', 'rna_edit=',
                                        'tumor-sample=', 'normal-sample=', 'rnaedit-known-only',
                                        'rnaedit-allow-novel', 'rnaedit-known-key=', 'phasing-mode=',
-                                       'superpeptides='])
+                                       'superpeptides=', 'parallel-k=', 'parallel_k='])
         if not optlist:
             print('No options supplied')
             usage()
@@ -2948,6 +2980,7 @@ def read_options(argv):
     if phasing_mode not in ('auto', 'strict'):
         sys.exit('ERROR: --phasing-mode must be one of: auto, strict')
     superpeptides = parse_bool_opt(opts.get('--superpeptides', 'false'), '--superpeptides')
+    parallel_k = parse_bool_opt(opts.get('--parallel-k', opts.get('--parallel_k', 'false')), '--parallel-k')
 
     inputinfo = RunConfig(
         vcf_file=vcf_file,
@@ -2979,7 +3012,8 @@ def read_options(argv):
         rnaedit_known_only=rnaedit_known_only,
         rnaedit_known_key=rnaedit_known_key,
         phasing_mode=phasing_mode,
-        superpeptides=superpeptides
+        superpeptides=superpeptides,
+        parallel_k=parallel_k
     )
 
     return inputinfo

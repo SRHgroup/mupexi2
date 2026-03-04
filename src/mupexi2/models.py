@@ -33,6 +33,7 @@ class RunConfig:
     rnaedit_known_key: str
     phasing_mode: str
     superpeptides: bool
+    parallel_k: bool
 
 
 @dataclass(frozen=True)
