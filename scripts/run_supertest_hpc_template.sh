@@ -46,6 +46,8 @@ cases=(
 ok_count=0
 unexpected_count=0
 skip_count=0
+case_idx=0
+total_cases="${#cases[@]}"
 
 run_case() {
   local case_id="$1"
@@ -57,13 +59,14 @@ run_case() {
   local case_out="$RUN_DIR/$case_id"
   local log_file="$RUN_DIR/${case_id}.log"
   mkdir -p "$case_out"
+  case_idx=$((case_idx + 1))
 
   local -a cmd=(python3 -m mupexi2.cli)
 
   if [[ "$kind" == "snv" || "$kind" == "mixed" ]]; then
     if [[ ! -f "$VCF" ]]; then
       echo -e "${case_id}\t${kind}\t${expected_rc}\tNA\tSKIP\t${prefix}\t${log_file}" >> "$SUMMARY_TSV"
-      echo "SKIP: missing VCF $VCF" > "$log_file"
+      echo "[$(date +'%F %T')] CASE=$case_id SKIP missing VCF $VCF" | tee "$log_file"
       skip_count=$((skip_count + 1))
       return
     fi
@@ -73,7 +76,7 @@ run_case() {
   if [[ "$kind" == "fusion" || "$kind" == "mixed" ]]; then
     if [[ ! -f "$FUSION_TSV" ]]; then
       echo -e "${case_id}\t${kind}\t${expected_rc}\tNA\tSKIP\t${prefix}\t${log_file}" >> "$SUMMARY_TSV"
-      echo "SKIP: missing FUSION_TSV $FUSION_TSV" > "$log_file"
+      echo "[$(date +'%F %T')] CASE=$case_id SKIP missing FUSION_TSV $FUSION_TSV" | tee "$log_file"
       skip_count=$((skip_count + 1))
       return
     fi
@@ -89,14 +92,21 @@ run_case() {
   local extra=( $extra_args )
   cmd+=("${extra[@]}")
 
+  echo
+  echo "============================================================"
+  echo "CASE ${case_idx}/${total_cases}: $case_id"
+  echo "kind=$kind expected_rc=$expected_rc"
+  echo "log=$log_file"
+  echo "CMD: ${cmd[*]}"
+  echo "============================================================"
   {
-    echo "[$(date +'%F %T')] CASE=$case_id START kind=$kind"
+    echo "[$(date +'%F %T')] CASE=$case_id START kind=$kind expected_rc=$expected_rc"
     echo "CMD: ${cmd[*]}"
   } > "$log_file"
 
   set +e
-  "${cmd[@]}" >> "$log_file" 2>&1
-  local rc=$?
+  "${cmd[@]}" 2>&1 | tee -a "$log_file"
+  local rc=${PIPESTATUS[0]}
   set -e
 
   local artifact_ok=1
@@ -120,7 +130,7 @@ run_case() {
     unexpected_count=$((unexpected_count + 1))
   fi
 
-  echo "[$(date +'%F %T')] CASE=$case_id END rc=$rc expected=$expected_rc artifact_ok=$artifact_ok status=$status" >> "$log_file"
+  echo "[$(date +'%F %T')] CASE=$case_id END rc=$rc expected=$expected_rc artifact_ok=$artifact_ok status=$status" | tee -a "$log_file"
   echo -e "${case_id}\t${kind}\t${expected_rc}\t${rc}\t${status}\t${prefix}\t${log_file}" >> "$SUMMARY_TSV"
 }
 
