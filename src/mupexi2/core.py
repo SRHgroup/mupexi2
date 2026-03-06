@@ -1563,7 +1563,21 @@ def peptide_extraction(peptide_lengths, vep_info, proteome_reference, genome_ref
         reference_peptide_file_paths[k] = v if isinstance(v, str) else v.name
 
     if parallel_k and len(peptide_lengths) > 1:
-        max_workers = min(len(peptide_lengths), os.cpu_count() or len(peptide_lengths))
+        detected_cpus = os.cpu_count() or 1
+        requested_workers = len(peptide_lengths)
+        print_ifnot_webserver(
+            '\tparallel-k requested: k_count={} detected_cpus={}'.format(
+                requested_workers, detected_cpus),
+            webserver
+        )
+        if detected_cpus < requested_workers:
+            sys.exit(
+                'ERROR: --parallel-k true requires >= {} CPUs for k-length set {}, but detected {} CPUs. '
+                'Either request more CPUs or disable --parallel-k.'.format(
+                    requested_workers, peptide_lengths, detected_cpus
+                )
+            )
+        max_workers = min(requested_workers, detected_cpus)
         futures = []
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             for p_length in peptide_lengths:
@@ -2923,98 +2937,66 @@ def webserver_print_output(webserver, www_tmp_dir, output, logfile, fasta_file_n
 
 def usage():
     usage = """
-        MuPeXI - Mutant Peptide Extractor and Informer
+        MuPeXI2 - Mutant Peptide Extractor and Informer
 
-        The current version of this program is available from
-        https://github.com/ambj/MuPeXI
+        Usage:
+          {call} [options]
 
-        MuPeXI.py accepts a VCF file describing somatic mutations as input, and from this 
-        derives a set of mutated peptides of specified length(s). These mutated peptides 
-        are returned in a table along with various annotations that may be useful for 
-        predicting the immunogenicity of each peptide.
+        Input requirement:
+          At least one of --vcf-file or --fusion-file must be provided.
 
-        Usage: {call} -v <VCF-file> [options]
-                                                                                    DEFAULT
+        Core input options:
+          -v, --vcf-file <file>         SNV/indel VCF input
+          -z, --fusion-file <file>      Arriba-like fusion TSV input
+          -a, --alleles <list>          Comma-separated HLA alleles                [default: HLA-A02:01]
+          -l, --length <spec>           Peptide length(s): 9 | 9-11 | 9,10,11      [default: 9]
+          -e, --expression-file <file>  Expression table (ENST/ENSG <tab> mean)
+          -E, --expression-type <type>  transcript|gene                              [default: transcript]
 
-        Required arguments:
-        -v, --vcf-file <file>   VCF file of variant calls, preferably from          SampX.vcf
-                                MuTect (only SNVs) or MuTect2 (SNVs and indels)
-        -z, --fusion_file       Fusion file, tsv file with chimeric proteins        SampX_fusions.tsv
-                                Currently only supports output of Arriba    
+        Output/control options:
+          -o, --output-file <name>      Output filename                              [default: <prefix>.mupexi]
+          -d, --out-dir <dir>           Output directory                             [default: cwd]
+          -p, --prefix <name>           Prefix for output artifacts                  [default: VCF basename]
+          -L, --log-file <name>         Log filename                                 [default: <prefix>.log]
+          -f, --make-fasta              Also emit FASTA with long peptides
+          -t, --keep-temp               Keep temporary files
+          -M, --mismatch-only           Print mismatch-only normal peptides
+          -n, --netmhc-full-anal        Run full NetMHCpan EL+BA mode
 
-        Recommended arguments:
-        -a, --alleles           HLA alleles, comma separated.                       HLA-A02:01
-        -l, --length            Peptide length, given as single number,             9
-                                range (9-11) or comma separated (9,10,11).
-        -e, --expression-file   Expression file, tab separated
-                                ((ENST*/ENSG*) \t mean)
-        -E, --expression-type   Are the expression values in the expression         transcript
-                                files determined on transcript or gene level.
-                                (transcript/gene)
+        Reference/runtime options:
+          -c, --config-file <file>      Config ini path                              [default: package config.ini]
+          -A, --assembly <name>         VEP assembly                                 [default: species default]
+          -s, --species <name>          human|mouse|mouse_black6|mouse_balbc        [default: human]
+          -F, --fork <int>              VEP fork count (>1)                          [default: 2]
+          -g, --liftover                Liftover hg19 input VCF to GRCh38
+          -w, --webface                 Webserver mode
 
-        Optional arguments affecting output files:
+        Multi-source VCF options:
+          --vcf-type <type>             mutect2|merged                               [default: mutect2]
+          --vcf_type <type>             Alias for --vcf-type
+          --germlines <bool>            Include GERMLINE context                     [default: false]
+          --rna-edit <bool>             Include RNA_EDIT primary variants            [default: false]
+          --rna_edit <bool>             Alias for --rna-edit
+          --tumor-sample <name>         Explicit tumor sample column name
+          --normal-sample <name>        Explicit normal sample column name
+          --rnaedit-known-only          Keep only known RNA_EDIT sites               [default: true]
+          --rnaedit-allow-novel         Include novel RNA_EDIT sites
+          --rnaedit-known-key <key>     INFO field for known RNA edits               [default: KNOWN_RNAEDIT_DB]
+          --phasing-mode <mode>         auto|strict                                   [default: auto]
 
-        -o, --output-file       Output file name.                                   <VEP-file>.mupexi
-        -d, --out-dir           Output directory - full path.                       current directory
-        -p, --prefix            Prefix for output files - will be applied           <VCF-file>
-                                to all (.mupexi, .log, .fasta) unless specified 
-                                by -o or -L.
-        -L, --log-file          Logfile name.                                       <VCF-file>.log
-        -m, --mismatch-number   Maximum number of mismatches to search for in       4
-                                normal peptide match.
-        -A, --assembly          The assembly version to run VEP.                    GRCh38
-        -s, --species           Species to analyze (human / mouse / mouse_black6 /  human
-                                mouse_balbc)
-                                If mouse is set default assembly is GRCm38.
-                                Remember to download the correct VEP cache
-                                and state species corresponding MHC alleles.
+        Context/superpeptide options:
+          --superpeptides <bool>        Allow phased nearby S/R context variants     [default: false]
+          --parallel-k <bool>           Run k=length jobs in parallel                [default: false]
+          --parallel_k <bool>           Alias for --parallel-k
+          --context-rna-min-depth <n>   Min tumor depth for RNA_EDIT context         [default: 0]
+          --context-rna-min-alt-count <n> Min tumor alt count for RNA_EDIT context   [default: 0]
+          --context-rna-min-vaf <f>     Min tumor VAF for RNA_EDIT context           [default: 0]
+          --context-somatic-min-depth <n> Min tumor depth for SOMATIC context        [default: 0]
+          --context-somatic-min-alt-count <n> Min tumor alt count for SOMATIC context [default: 0]
+          --context-somatic-min-vaf <f> Min tumor VAF for SOMATIC context            [default: 0]
 
-        Optional arguments affecting computational process:
-        -F, --fork              Number of processors running VEP.                   2
-        --vcf-type              Input VCF caller style (mutect2/merged)            mutect2
-        --vcf_type              Alias for --vcf-type
-        --germlines             Include germline context variants (true/false)      false
-        --rna-edit              Include RNA_EDIT variants (true/false)              false
-        --rna_edit              Alias for --rna-edit
-        --tumor-sample          Explicit tumor sample column name in VCF
-        --normal-sample         Explicit normal sample column name in VCF
-        --rnaedit-known-only    Keep only RNA_EDIT variants marked as known         true
-        --rnaedit-allow-novel   Include novel RNA_EDIT variants (overrides known-only)
-        --rnaedit-known-key     INFO key used to mark known RNA edits               KNOWN_RNAEDIT_DB
-        --phasing-mode          Phasing policy for germline context                  auto
-                                (auto/strict)
-        --superpeptides         Include phased/hom-alt nearby S/R variants as context false
-                                (true/false)
-        --parallel-k            Run each peptide length (k) in parallel             false
-        --parallel_k            Alias for --parallel-k
-        --context-rna-min-depth Minimum tumor depth for RNA_EDIT context            0
-        --context-rna-min-alt-count
-                                Minimum tumor alt count for RNA_EDIT context         0
-        --context-rna-min-vaf   Minimum tumor VAF for RNA_EDIT context              0
-        --context-somatic-min-depth
-                                Minimum tumor depth for SOMATIC context              0
-        --context-somatic-min-alt-count
-                                Minimum tumor alt count for SOMATIC context          0
-        --context-somatic-min-vaf
-                                Minimum tumor VAF for SOMATIC context                0
-        Other options (these do not take values)
-        -f, --make-fasta        Create FASTA file with long peptides 
-                                - mutation in the middle
-        -c, --config-file       Path to the config.ini file                         current directory
-        -t, --keep-temp         Retain all temporary files
-        -M, --mismatch-only     Print only mismatches in normal peptide sequence 
-                                and otherwise use dots (...AA.....)
-        -w, --webface           Run in webserver mode
-        -g, --liftover          Perform liftover HG19 to GRCh38.
-                                Requires local picard installation with paths
-                                stated in the config file
-        -n, --netmhc-full-anal  Run NetMHCpan 4.0 with the full analysis including 
-                                both eluted ligand (EL) and binding affinity (BA) 
-                                prediction output (priority score calculated from 
-                                EL rank score)
-        -h, --help              Print this help information
-
-        REMEMBER to state references in the config.ini file
+        Help:
+          -h, --help                    Show this message
         """
     print((usage.format(call=sys.argv[0], path='/'.join(sys.argv[0].split('/')[0:-1]))))
 
