@@ -4,15 +4,27 @@ This repository packages the current **MuPeXI2** workflow for safer iteration an
 
 ## Install
 
+Clone the repo
 ```bash
+git clone https://github.com/SRHgroup/mupexi2.git
+cd mupexi2
+```
+
+We reccoment creating dedicated conda enviornment to avoid dependencies issues
+```
 conda create -n mupexi2 python=3.11 -y
 conda activate mupexi2
+```
+
+Install
+```
 pip install -e ".[dev]"
 ```
 
 For offline/HPC runs you can also use:
 
 ```bash
+cd /path/to/mupexi2
 export PYTHONPATH="$REPO/src:${PYTHONPATH:-}"
 python3 -m mupexi2.cli -h
 ```
