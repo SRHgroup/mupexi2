@@ -1,4 +1,4 @@
-# mupexi2 (lab repo)
+# mupexi2 
 
 This repository packages the current **MuPeXI2** workflow for safer iteration and reproducible runs.
 
@@ -19,14 +19,16 @@ python3 -m mupexi2.cli -h
 
 ## Documentation
 
-- Full CLI/input reference: `docs/cli_parameters.md`
-- Synthetic VCF input examples: `docs/vcf_input_examples.md`
-- Output column schema: `docs/output_schema.md`
+- Full input parameters: `docs/cli_parameters.md`
+- VCF input example schema: `docs/vcf_input_examples.md`
+- VCF example: `docs/vcf_examples`
+- Output file schema: `docs/output_schema.md`
+- Output file example: `docs/output_example.mupexi`
 - Contributor workflow: `CONTRIBUTING.md`
 
 ## Quick usage
 
-Somatic-only style:
+Somatic-only mode:
 
 ```bash
 python3 -m mupexi2.cli \
@@ -39,7 +41,7 @@ python3 -m mupexi2.cli \
   -e /path/to/expression.tsv
 ```
 
-Merged multi-source VCF (SOMATIC + GERMLINE + RNA_EDIT):
+Merged multi-source VCF mode (SOMATIC + GERMLINE + RNA_EDIT):
 
 ```bash
 python3 -m mupexi2.cli \
@@ -60,17 +62,6 @@ python3 -m mupexi2.cli \
   -p Sample_01 \
   -d /path/to/outdir \
   -e /path/to/expression.tsv
-```
-
-## Tests
-
-Current tests are lightweight and avoid large reference bundles:
-- CLI help exits cleanly
-- peptide-length parsing works
-- default config path resolves inside the package
-
-```bash
-pytest -q
 ```
 
 ## Example artifacts
