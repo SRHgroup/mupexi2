@@ -1,6 +1,6 @@
 # mupexi2 
 
-This repository packages the current **MuPeXI2** workflow for safer iteration and reproducible runs.
+This repository packages the current **MuPeXI2** workflow for neoantigen peptide extraction and immunogenicity annotation from cancer mutation calling files.
 
 ## Install
 
@@ -10,7 +10,7 @@ git clone https://github.com/SRHgroup/mupexi2.git
 cd mupexi2
 ```
 
-We reccoment creating dedicated conda enviornment to avoid dependencies issues
+We reccomend creating dedicated conda enviornment to avoid dependencies issues
 ```
 conda create -n mupexi2 python=3.11 -y
 conda activate mupexi2
@@ -36,6 +36,7 @@ python3 -m mupexi2.cli -h
 - VCF example: `docs/vcf_examples`
 - Output file schema: `docs/output_schema.md`
 - Output file example: `docs/output_example.mupexi`
+- CONFIG file example: `docs/your_server.ini`
 - Contributor workflow: `CONTRIBUTING.md`
 
 ## Quick usage
@@ -76,8 +77,3 @@ python3 -m mupexi2.cli \
   -e /path/to/expression.tsv
 ```
 
-## Example artifacts
-
-`examples/` contains:
-- `your_server.ini` (example cluster config)
-- `output_example.mupexi` (example output for regression/reference)
