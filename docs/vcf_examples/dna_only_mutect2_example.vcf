@@ -1,0 +1,10 @@
+##fileformat=VCFv4.2
+##source=MuPeXi2_docs_synthetic_example
+##reference=GRCh38
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths (ref,alt)">
+##FORMAT=<ID=AF,Number=A,Type=Float,Description="Allele fraction">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	DNA_NORMAL	TUMOR
+1	200100	.	G	A	.	PASS	SOMATIC	GT:AD:AF	0/0:60,0:0.000	0/1:35,14:0.286
+1	200220	.	T	C	.	PASS	SOMATIC	GT:AD:AF	0/0:44,0:0.000	0/1:28,9:0.243
+1	200330	.	C	G	.	PASS	SOMATIC	GT:AD:AF	0/0:52,0:0.000	0/1:30,11:0.268

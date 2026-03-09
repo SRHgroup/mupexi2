@@ -1,0 +1,13 @@
+##fileformat=VCFv4.2
+##source=MuPeXi2_docs_synthetic_example
+##reference=GRCh38
+##INFO=<ID=SOURCE_SET,Number=1,Type=String,Description="Variant source class: SOMATIC, GERMLINE, or RNA_EDIT">
+##INFO=<ID=KNOWN_RNAEDIT_DB,Number=.,Type=String,Description="Database tag for known RNA-editing site(s)">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths (ref,alt)">
+##FORMAT=<ID=AF,Number=A,Type=Float,Description="Allele fraction">
+##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	DNA_NORMAL	TUMOR
+1	100100	.	A	G	.	PASS	SOURCE_SET=SOMATIC	GT:AD:AF:PS	0/0:40,0:0.000:.	0|1:30,12:0.286:100000
+1	100108	.	C	T	.	PASS	SOURCE_SET=GERMLINE	GT:AD:AF:PS	0|1:20,18:0.474:100000	0|1:22,20:0.476:100000
+1	100112	.	T	C	.	PASS	SOURCE_SET=RNA_EDIT;KNOWN_RNAEDIT_DB=REDIportal	GT:AD:AF:PS	0/0:45,0:0.000:.	0|1:35,10:0.222:100000
