@@ -160,11 +160,12 @@ def main(args):
 
         print_ifnot_webserver('\nMuPeX: Starting mutant peptide extraction for fusion mutations', input_.webserver)
 
-        fus_info, fus_transcript_info, fus_counter = build_fusion_info(fusion_file=input_.fusion_file,
-                                                                       discarded_fusion_file='{}_discarded.tsv'.format(
-                                                                           input_.fusion_file.replace('.tsv', '')),
-                                                                       webserver=None, junction_filter=3,
-                                                                       spanning_filter=1)
+        fus_info, fus_transcript_info, fus_counter = build_fusion_info(
+            fusion_file=input_.fusion_file,
+            webserver=None,
+            junction_filter=3,
+            spanning_filter=1
+        )
 
         fus_peptide_info, fus_peptide_counters, fus_fasta_printout, fus_pepmatch = fusion_peptide_extraction(
             peptide_lengths=peptide_length, fus_info=fus_info,
@@ -1331,11 +1332,17 @@ def get_nearby_germlines(chrom, pos, germline_positions, peptide_length, primary
 
 
 def build_fusion_info(fusion_file, webserver, discarded_fusion_file=None, junction_filter=3, spanning_filter=1):
-    if discarded_fusion_file is not None:  # should be if else with discarded read by default, and second option for star-fusion outs
-        fus_df = pandas.concat([read_dataset(fusion_file, index_col=None),
-                                read_dataset(discarded_fusion_file, index_col=None)], axis=0)
-    else:
-        fus_df = read_dataset(fusion_file, index_col=None)
+    fus_df = read_dataset(fusion_file, index_col=None)
+    if discarded_fusion_file is not None:
+        if os.path.exists(discarded_fusion_file):
+            fus_df = pandas.concat([fus_df, read_dataset(discarded_fusion_file, index_col=None)], axis=0)
+        else:
+            print_ifnot_webserver(
+                '\tWARNING: discarded fusion file not found ({}); continuing with --fusion-file only'.format(
+                    discarded_fusion_file
+                ),
+                webserver
+            )
 
     fus_df = fus_df.query('peptide_sequence.notna()', engine='python')  ### warning ###
     fus_df['split_reads'] = fus_df['split_reads1'] + fus_df['split_reads2']

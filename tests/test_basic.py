@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from mupexi2.core import (
+    build_fusion_info,
     parse_genotype_state,
     should_apply_context_variant,
     create_vep_compatible_vcf,
@@ -134,3 +135,22 @@ def test_parse_genotype_state_and_context_rule():
     assert should_apply_context_variant(primary, same_hap) is True
     assert should_apply_context_variant(primary, other_hap) is False
     assert should_apply_context_variant(primary, hom_alt) is True
+
+
+def test_build_fusion_info_ignores_missing_discarded_file(tmp_path):
+    fusion_tsv = tmp_path / "sample.fusions_arriba.tsv"
+    fusion_tsv.write_text(
+        "#gene1\tgene2\tgene_id1\tgene_id2\ttranscript_id1\ttranscript_id2\t"
+        "discordant_mates\tsplit_reads1\tsplit_reads2\treading_frame\tsite1\tsite2\t"
+        "breakpoint1\tbreakpoint2\tpeptide_sequence\tconfidence\n"
+        "GENEA\tGENEB\tENSG000001\tENSG000002\tENST000001\tENST000002\t"
+        "10\t4\t3\tinframe\texonic\texonic\t1:1000\t1:2000\tAAA|BBB\thigh\n"
+    )
+    missing_discarded = tmp_path / "sample.fusions_arriba_discarded.tsv"
+    info, _, counters = build_fusion_info(
+        fusion_file=str(fusion_tsv),
+        webserver=None,
+        discarded_fusion_file=str(missing_discarded),
+    )
+    assert len(info) == 1
+    assert counters.get("inframe") == 1
