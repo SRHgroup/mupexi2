@@ -145,6 +145,8 @@ def test_build_fusion_info_ignores_missing_discarded_file(tmp_path):
         "breakpoint1\tbreakpoint2\tpeptide_sequence\tconfidence\n"
         "GENEA\tGENEB\tENSG000001\tENSG000002\tENST000001\tENST000002\t"
         "10\t4\t3\tinframe\texonic\texonic\t1:1000\t1:2000\tAAA|BBB\thigh\n"
+        "GENEC\tGENED\tENSG000003\tENSG000004\tENST000003\tENST000004\t"
+        "1\t1\t0\tinframe\texonic\texonic\t1:3000\t1:4000\tCCC|DDD\tmedium\n"
     )
     missing_discarded = tmp_path / "sample.fusions_arriba_discarded.tsv"
     info, _, counters = build_fusion_info(

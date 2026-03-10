@@ -1347,8 +1347,7 @@ def build_fusion_info(fusion_file, webserver, discarded_fusion_file=None, juncti
     fus_df = fus_df.query('peptide_sequence.notna()', engine='python')  ### warning ###
     fus_df['split_reads'] = fus_df['split_reads1'] + fus_df['split_reads2']
 
-    fus_df = fus_df[((fus_df['discordant_mates'] > spanning_filter) & (fus_df['split_reads'] > junction_filter)) |
-                    (fus_df['confidence'].isin(['medium', 'high']))]
+    fus_df = fus_df[(fus_df['discordant_mates'] > spanning_filter) & (fus_df['split_reads'] > junction_filter)]
 
     fus_info = []  # empty list
     # Creating named tuple
