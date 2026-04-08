@@ -82,6 +82,7 @@ At least one of `--vcf-file` or `--fusion-file` must be provided.
   - Overrides `--rnaedit-known-only`
 - `--rnaedit-known-key <key>`: INFO key used to identify known RNA-edit sites.
   - Default: `KNOWN_RNAEDIT_DB`
+  - Any value under that key is treated as known, including labels such as `ASAOKA`, `RADAR`, `REDI_PORTAL`, and `APOBEC3_MOTIF`
 - `--phasing-mode <mode>`: phasing policy for germline context (`auto`, `strict`).
   - Default: `auto`
 

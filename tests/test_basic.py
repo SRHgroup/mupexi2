@@ -103,8 +103,9 @@ def test_create_vep_compatible_vcf_filters_rna_edit_known_only(tmp_path):
         "chr1\t10\t.\tA\tG\t.\tPASS\tSOURCE_SET=SOMATIC\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
         "chr1\t11\t.\tA\tT\t.\tq10\tSOURCE_SET=SOMATIC\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
         "chr1\t12\t.\tA\tC\t.\tstrand_bias\tSOURCE_SET=RNA_EDIT;KNOWN_RNAEDIT_DB=REDIportal\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
-        "chr1\t13\t.\tA\tC\t.\tstrand_bias\tSOURCE_SET=RNA_EDIT\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
-        "chr1\t14\t.\tA\tC\t.\tPASS\tSOURCE_SET=GERMLINE\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+        "chr1\t13\t.\tA\tC\t.\tstrand_bias\tSOURCE_SET=RNA_EDIT;KNOWN_RNAEDIT_DB=APOBEC3_MOTIF\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+        "chr1\t14\t.\tA\tC\t.\tstrand_bias\tSOURCE_SET=RNA_EDIT\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
+        "chr1\t15\t.\tA\tC\t.\tPASS\tSOURCE_SET=GERMLINE\tGT:AD:AF\t0/1:10,5:0.33\t0/0:12,0:0.0\n"
     )
     out = create_vep_compatible_vcf(
         str(vcf), None, None, str(tmp_path), "x", str(tmp_path), None,
@@ -112,10 +113,11 @@ def test_create_vep_compatible_vcf_filters_rna_edit_known_only(tmp_path):
     )
     with open(out.name) as fh:
         lines = [ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")]
-    assert len(lines) == 3
+    assert len(lines) == 4
     assert lines[0].startswith("1\t10")
     assert any("\t12\t" in ln for ln in lines)
-    assert any("\t14\t" in ln for ln in lines)
+    assert any("\t13\t" in ln for ln in lines)
+    assert any("\t15\t" in ln for ln in lines)
 
 
 def test_resolve_sample_indices_new_names():

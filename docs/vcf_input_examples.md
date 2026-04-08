@@ -27,6 +27,7 @@ Required/important fields:
   - Default behavior is equivalent to `--rnaedit-known-only`.
   - If this key is absent on RNA-edit records, use `--rnaedit-allow-novel` to include them.
   - The key name is configurable with `--rnaedit-known-key` (for example if your pipeline uses `KNOWN_DB` instead of `KNOWN_RNAEDIT_DB`).
+  - Common values can include `ASAOKA`, `RADAR`, `REDI_PORTAL`, and `APOBEC3_MOTIF`; MuPeXi2 treats all of them as known when this key is present.
 - For phasing-aware context application, tumor sample genotype/phasing should use:
   - `GT` with `|` (phased genotype), and
   - `PS` (phase set).
@@ -35,7 +36,7 @@ Notes:
 - By default MuPeXi2 keeps:
   - `SOMATIC` records with `FILTER=PASS`
   - `GERMLINE` records with `FILTER=PASS` (when `--germlines=true`)
-  - `RNA_EDIT` records with `KNOWN_RNAEDIT_DB` present (when `--rna-edit=true` and known-only mode)
+  - `RNA_EDIT` records with `KNOWN_RNAEDIT_DB` present (when `--rna-edit=true` and known-only mode), including `APOBEC3_MOTIF`
 
 ## 2) DNA-only (somatic) VCF
 
