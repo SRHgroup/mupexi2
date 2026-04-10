@@ -29,7 +29,7 @@ from six.moves import zip
 import warnings
 from .models import RunConfig, ContextMutation, VariantRecord, PeptideSequenceInfo, PepMatchInfo
 from .io_utils import open_text_maybe_gzip as _open_text_maybe_gzip
-from .vep_disambiguation import read_vep_file, select_best_vep_rows
+from .vep_strandness_control import VEPStrandnessStats, filter_vep_file_by_rna_edit_strandness
 from . import vcf as vcf_utils
 
 
@@ -90,8 +90,18 @@ def main(args):
 
         snv_qc = extract_snv_qc(vcf_sorted_file, input_.webserver, variant_caller, input_.tumor_sample,
                                 input_.normal_sample)
-        vep_file = run_vep(vcf_sorted_file, input_.webserver, tmp_dir, paths.vep_path, paths.vep_dir, input_.keep_temp,
-                           input_.prefix, input_.outdir, input_.assembly, input_.fork, species)
+        raw_vep_file = run_vep(vcf_sorted_file, input_.webserver, tmp_dir, paths.vep_path, paths.vep_dir,
+                               input_.keep_temp, input_.prefix, input_.outdir, input_.assembly, input_.fork, species)
+        vep_file, vep_strandness_stats = apply_vep_strandness_control(
+            raw_vep_file=raw_vep_file,
+            vep_compatible_vcf=vcf_sorted_file,
+            tmp_dir=tmp_dir,
+            webserver=input_.webserver,
+            keep_tmp=input_.keep_temp,
+            file_prefix=input_.prefix,
+            outdir=input_.outdir,
+            rna_edit_enabled=input_.rna_edit
+        )
         context_qc_thresholds = {
             'RNA_EDIT': {
                 'min_depth': input_.context_rna_min_depth,
@@ -107,7 +117,7 @@ def main(args):
 
         vep_info, vep_counters, transcript_info, protein_positions = build_vep_info(
             vep_file, input_.webserver, vcf_sorted_file, peptide_length, input_.tumor_sample, input_.normal_sample,
-            phasing_stats, input_.superpeptides, context_qc_thresholds)
+            phasing_stats, input_.superpeptides, context_qc_thresholds, vep_strandness_stats)
 
         end_time_vep = datetime.now()
 
@@ -1008,13 +1018,44 @@ def run_vep(vcf_sorted_file, webserver, tmp_dir, vep_path, vep_dir, keep_tmp, fi
             print("NOTE:\tCheck the VCF file have been generated with The GRCh38 assembly - or use the liftover option")
         sys.exit()
 
-    keep_temp_file(keep_tmp, 'vep', vep_file.name, file_prefix, outdir, None, 'vep')
-
     return vep_file
 
 
+def apply_vep_strandness_control(raw_vep_file, vep_compatible_vcf, tmp_dir, webserver, keep_tmp, file_prefix, outdir,
+                                 rna_edit_enabled=False):
+    if not rna_edit_enabled:
+        keep_temp_file(keep_tmp, 'vep', raw_vep_file.name, file_prefix, outdir, None, 'vep')
+        return raw_vep_file, VEPStrandnessStats(
+            total_vep_rows_read=0,
+            total_unique_uploaded_variations=0,
+            rna_edit_uploaded_variations_considered=0,
+            rna_edit_variations_with_strand_conflict=0,
+            vep_rows_dropped_by_strandness_control=0
+        )
+
+    filtered_vep_file = NamedTemporaryFile(delete=False, dir=tmp_dir)
+    filtered_vep_file.close()
+    strandness_stats = filter_vep_file_by_rna_edit_strandness(
+        input_path=raw_vep_file.name,
+        output_path=filtered_vep_file.name,
+        vcf_path=vep_compatible_vcf.name
+    )
+    print_ifnot_webserver(
+        '\tVEP strandness control: read {} rows across {} Uploaded_variation values; {} RNA_EDIT mutations considered; {} had transcript rows on both strands; {} rows dropped'.format(
+            strandness_stats.total_vep_rows_read,
+            strandness_stats.total_unique_uploaded_variations,
+            strandness_stats.rna_edit_uploaded_variations_considered,
+            strandness_stats.rna_edit_variations_with_strand_conflict,
+            strandness_stats.vep_rows_dropped_by_strandness_control,
+        ),
+        webserver
+    )
+    keep_temp_file(keep_tmp, 'vep', filtered_vep_file.name, file_prefix, outdir, None, 'vep')
+    return filtered_vep_file, strandness_stats
+
+
 def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumor_sample=None, normal_sample=None,
-                   phasing_stats=None, superpeptides=False, context_qc_thresholds=None):
+                   phasing_stats=None, superpeptides=False, context_qc_thresholds=None, vep_strandness_stats=None):
     print_ifnot_webserver('\tCreating mutation information dictionary', webserver)
     vep_info = []  # empty list
     previous_mutation_id = previous_mutation_id_vep = ''  # empty string
@@ -1034,20 +1075,16 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
             'RNA_EDIT': {'min_depth': 0, 'min_alt_count': 0, 'min_vaf': 0.0},
             'SOMATIC': {'min_depth': 0, 'min_alt_count': 0, 'min_vaf': 0.0}
         }
+    if vep_strandness_stats is None:
+        vep_strandness_stats = VEPStrandnessStats(
+            total_vep_rows_read=0,
+            total_unique_uploaded_variations=0,
+            rna_edit_uploaded_variations_considered=0,
+            rna_edit_variations_with_strand_conflict=0,
+            vep_rows_dropped_by_strandness_control=0
+        )
 
-    _, raw_vep_rows = read_vep_file(vep_file.name)
-    filtered_vep_rows, transcript_disambiguation_stats = select_best_vep_rows(raw_vep_rows)
-    print_ifnot_webserver(
-        '\tVEP transcript disambiguation: read {} rows across {} Uploaded_variation values; {} mutations had >1 transcript row; {} rows dropped'.format(
-            transcript_disambiguation_stats.total_vep_rows_read,
-            transcript_disambiguation_stats.total_unique_uploaded_variations,
-            transcript_disambiguation_stats.mutations_with_multiple_transcript_rows,
-            transcript_disambiguation_stats.transcript_rows_dropped_by_disambiguation,
-        ),
-        webserver
-    )
-
-    with open(vep_compatible_vcf.name) as vcf:
+    with open(vep_file.name) as f, open(vep_compatible_vcf.name) as vcf:
 
         variant_types = {}
         variant_edit_sig = {}
@@ -1095,7 +1132,7 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
                 elif t_depth not in ('NA', 0) and t_depth != 0 and t_alt_count != 'NA':
                     tumor_vaf = '{:.6g}'.format(float(t_alt_count) / float(t_depth))
 
-        for line in filtered_vep_rows:
+        for line in f.readlines():
             if line.startswith('#'):
                 continue
             consequence = line.strip().split('\t')[6]
@@ -1125,91 +1162,93 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
                 )
                 context_positions[chrom_pos] = variant_info
 
-    for i, line in enumerate(filtered_vep_rows):
-        if line.startswith('#'):  # skip lines starting with #
-            continue
+    with open(vep_file.name) as f:
+
+        for i, line in enumerate(f.readlines()):
+            if line.startswith('#'):  # skip lines starting with #
+                continue
             # Go to the next line if it is not a missense variant mutations
-        mutation_consequence = ['missense_variant', 'inframe_insertion', 'inframe_deletion', 'frameshift_variant']
-        mutation_id = line.split('\t')[0].strip()
-        if not any(wanted_consequence in line for wanted_consequence in mutation_consequence):
-            if not mutation_id == previous_mutation_id:
-                non_used_mutation_count += 1
-                # save previous mutation ID
-                previous_mutation_id = mutation_id
-            continue
-        if 'stop' in line:
-            continue
-        line = line.split('\t')
-        # save relevant information from line
-        mutation_consequence = line[6].split(',')[0].strip()
-        chr_, genome_pos = line[1].split(':')
-        alt_allele = line[2].strip()
-        geneID = line[3].strip()
-        transID = line[4].strip()
-        prot_pos = line[9].strip()
-        cdna_pos = line[7].strip()
-        symbol = re.search(r'SYMBOL=(\d*\w*\d*\w*\d*\w*)',
-                           line[13]).group(1).strip() if not re.search(r'SYMBOL', line[13]) is None else '-'
-        aa_normal, aa_mutation = line[10].split('/')
-        codon_normal, codon_mut = line[11].split('/')
-        if '-' in line[9]:
-            prot_pos, prot_pos_to = line[9].split('-')
-        else:
-            prot_pos, prot_pos_to = line[9].strip(), None
-        variant_type = variant_types.get((chr_, genome_pos), 'UNKNOWN')
-        edit_sig = variant_edit_sig.get((chr_, genome_pos), 'NA')
-        if variant_type == 'GERMLINE':
-            # Germline variants are context-only and never become primary output rows.
-            continue
+            mutation_consequence = ['missense_variant', 'inframe_insertion', 'inframe_deletion', 'frameshift_variant']
+            mutation_id = line.split('\t')[0].strip()
+            if not any(wanted_consequence in line for wanted_consequence in mutation_consequence):
+                if not mutation_id == previous_mutation_id:
+                    non_used_mutation_count += 1
+                    # save previous mutation ID
+                    previous_mutation_id = mutation_id
+                continue
+            if 'stop' in line:
+                continue
+            line = line.split('\t')
+            # save relevant information from line
+            mutation_consequence = line[6].split(',')[0].strip()
+            chr_, genome_pos = line[1].split(':')
+            alt_allele = line[2].strip()
+            geneID = line[3].strip()
+            transID = line[4].strip()
+            prot_pos = line[9].strip()
+            cdna_pos = line[7].strip()
+            symbol = re.search(r'SYMBOL=(\d*\w*\d*\w*\d*\w*)',
+                               line[13]).group(1).strip() if not re.search(r'SYMBOL', line[13]) is None else '-'
+            aa_normal, aa_mutation = line[10].split('/')
+            codon_normal, codon_mut = line[11].split('/')
+            if '-' in line[9]:
+                prot_pos, prot_pos_to = line[9].split('-')
+            else:
+                prot_pos, prot_pos_to = line[9].strip(), None
+            variant_type = variant_types.get((chr_, genome_pos), 'UNKNOWN')
+            edit_sig = variant_edit_sig.get((chr_, genome_pos), 'NA')
+            if variant_type == 'GERMLINE':
+                # Germline variants are context-only and never become primary output rows.
+                continue
 
-        primary_phase_state = variant_phase.get((chr_, genome_pos), None)
-        if variant_type in ('SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
-            nearby_germlines = get_nearby_germlines(chr_, genome_pos, context_positions, peptide_length,
-                                                    primary_phase_state, variant_phase, phasing_stats,
-                                                    include_all_sources=superpeptides,
-                                                    context_qc_thresholds=context_qc_thresholds)
-        else:
-            nearby_germlines = None
-        mutation_id_vep = '{}_{}_{}/{}'.format(chr_, genome_pos, aa_normal, aa_mutation)
-        # Generate dict of dicts (dependent on both mutation ID and gene ID)
-        # then set the default value of the key to be a list and append the transcript id
-        transcript_info[mutation_id_vep].setdefault(geneID, []).append(transID)
-        # ad protein position
-        protein_positions[mutation_id_vep][geneID][transID] = prot_pos
-        # append information from the line to the list of named tuples - fill tuple
-        vep_info.append(
-            VariantRecord(
-                gene_id=geneID,
-                trans_id=transID,
-                mutation_consequence=mutation_consequence,
-                chr=chr_,
-                pos=genome_pos,
-                cdna_pos=cdna_pos,
-                prot_pos=int(prot_pos),
-                prot_pos_to=prot_pos_to,
-                aa_normal=aa_normal,
-                aa_mut=aa_mutation,
-                codon_normal=codon_normal,
-                codon_mut=codon_mut,
-                alt_allele=alt_allele,
-                symbol=symbol,
-                variant_type=variant_type,
-                edit_sig=edit_sig,
-                nearby_germlines=nearby_germlines
-            ))
+            primary_phase_state = variant_phase.get((chr_, genome_pos), None)
+            if variant_type in ('SOMATIC', 'RNA_EDIT', 'UNKNOWN'):
+                nearby_germlines = get_nearby_germlines(chr_, genome_pos, context_positions, peptide_length,
+                                                        primary_phase_state, variant_phase, phasing_stats,
+                                                        include_all_sources=superpeptides,
+                                                        context_qc_thresholds=context_qc_thresholds)
+            else:
+                nearby_germlines = None
+            mutation_id_vep = '{}_{}_{}/{}'.format(chr_, genome_pos, aa_normal, aa_mutation)
+            # Generate dict of dicts (dependent on both mutation ID and gene ID)
+            # then set the default value of the key to be a list and append the transcript id
+            transcript_info[mutation_id_vep].setdefault(geneID, []).append(transID)
+            # ad protein position
+            protein_positions[mutation_id_vep][geneID][transID] = prot_pos
+            # append information from the line to the list of named tuples - fill tuple
+            vep_info.append(
+                VariantRecord(
+                    gene_id=geneID,
+                    trans_id=transID,
+                    mutation_consequence=mutation_consequence,
+                    chr=chr_,
+                    pos=genome_pos,
+                    cdna_pos=cdna_pos,
+                    prot_pos=int(prot_pos),
+                    prot_pos_to=prot_pos_to,
+                    aa_normal=aa_normal,
+                    aa_mut=aa_mutation,
+                    codon_normal=codon_normal,
+                    codon_mut=codon_mut,
+                    alt_allele=alt_allele,
+                    symbol=symbol,
+                    variant_type=variant_type,
+                    edit_sig=edit_sig,
+                    nearby_germlines=nearby_germlines
+                ))
 
-        # count independent mutation mutation consequences
-        if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'missense_variant':
-            misssense_variant_count += 1
-        if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'inframe_insertion':
-            inframe_insertion_count += 1
-        if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'inframe_deletion':
-            inframe_deletion_count += 1
-        if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'frameshift_variant':
-            frameshift_variant_count += 1
+            # count independent mutation mutation consequences
+            if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'missense_variant':
+                misssense_variant_count += 1
+            if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'inframe_insertion':
+                inframe_insertion_count += 1
+            if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'inframe_deletion':
+                inframe_deletion_count += 1
+            if (not mutation_id_vep == previous_mutation_id_vep) and mutation_consequence == 'frameshift_variant':
+                frameshift_variant_count += 1
 
-        # save previous mutation ID
-        previous_mutation_id_vep = mutation_id_vep
+            # save previous mutation ID
+            previous_mutation_id_vep = mutation_id_vep
 
     if not vep_info:
         sys.exit(
@@ -1228,14 +1267,16 @@ def build_vep_info(vep_file, webserver, vep_compatible_vcf, peptide_length, tumo
                              ['non_used_mutation_count', 'misssense_variant_count', 'gene_count', 'transcript_Count',
                               'inframe_insertion_count', 'inframe_deletion_count', 'frameshift_variant_count',
                               'total_vep_rows_read', 'total_unique_uploaded_variations',
-                              'mutations_with_multiple_transcript_rows',
-                              'transcript_rows_dropped_by_disambiguation'])
+                              'rna_edit_uploaded_variations_considered',
+                              'rna_edit_variations_with_strand_conflict',
+                              'vep_rows_dropped_by_strandness_control'])
     vep_counters = VEPCounters(non_used_mutation_count, misssense_variant_count, gene_count, transcript_Count,
                                inframe_insertion_count, inframe_deletion_count, frameshift_variant_count,
-                               transcript_disambiguation_stats.total_vep_rows_read,
-                               transcript_disambiguation_stats.total_unique_uploaded_variations,
-                               transcript_disambiguation_stats.mutations_with_multiple_transcript_rows,
-                               transcript_disambiguation_stats.transcript_rows_dropped_by_disambiguation)
+                               vep_strandness_stats.total_vep_rows_read,
+                               vep_strandness_stats.total_unique_uploaded_variations,
+                               vep_strandness_stats.rna_edit_uploaded_variations_considered,
+                               vep_strandness_stats.rna_edit_variations_with_strand_conflict,
+                               vep_strandness_stats.vep_rows_dropped_by_strandness_control)
 
     print_ifnot_webserver('\tContext stats: skipped_unphased_het_germline_context={} skipped_context_qc_records={} applied_context_records={}'.format(
         phasing_stats.get('skipped_unphased_het_germline_context', 0),
@@ -2781,8 +2822,9 @@ def write_log_file(argv, peptide_length, sequence_count, reference_peptide_count
                                                            of which {unique_reference_peptide_count} were unique peptides
           Reading VEP file:                          Read {total_vep_rows_read} transcript annotation row(s) spanning
                                                            {total_unique_uploaded_variations} Uploaded_variation value(s)
-                                                     {mutations_with_multiple_transcript_rows} mutation(s) had >1 transcript row;
-                                                           {transcript_rows_dropped_by_disambiguation} row(s) were dropped by disambiguation
+                                                     RNA_EDIT strandness control considered {rna_edit_uploaded_variations_considered} Uploaded_variation value(s)
+                                                     {rna_edit_variations_with_strand_conflict} mutation(s) had transcript rows on both strands;
+                                                           {vep_rows_dropped_by_strandness_control} row(s) were dropped by strandness control
                                                      Found {non_used_mutation_count} irrelevant (synonymous) mutation consequences which were discarded
                                                      Found {misssense_variant_count} missense variant mutation(s) 
                                                            {inframe_insertion_count} insertion(s)
@@ -2821,8 +2863,9 @@ def write_log_file(argv, peptide_length, sequence_count, reference_peptide_count
                    frameshift_variant_count=vep_counters.frameshift_variant_count,
                    total_vep_rows_read=vep_counters.total_vep_rows_read,
                    total_unique_uploaded_variations=vep_counters.total_unique_uploaded_variations,
-                   mutations_with_multiple_transcript_rows=vep_counters.mutations_with_multiple_transcript_rows,
-                   transcript_rows_dropped_by_disambiguation=vep_counters.transcript_rows_dropped_by_disambiguation,
+                   rna_edit_uploaded_variations_considered=vep_counters.rna_edit_uploaded_variations_considered,
+                   rna_edit_variations_with_strand_conflict=vep_counters.rna_edit_variations_with_strand_conflict,
+                   vep_rows_dropped_by_strandness_control=vep_counters.vep_rows_dropped_by_strandness_control,
                    gene_count=vep_counters.gene_count,
                    transcript_Count=vep_counters.transcript_Count,
                    normal_match_count=peptide_counters.normal_match_count,
